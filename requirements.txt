@@ -4,6 +4,6 @@ Jinja2==3.1.6
 MarkupSafe==2.0.1
 pillow==10.3.0
 pillow-heif==0.10.0
-requests==2.31.0
+requests==2.32.2
 PyYAML==6.0.1
 piexif==1.1.3
