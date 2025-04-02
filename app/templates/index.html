@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Meural Canvas Image Cropper</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        /* Inline critical fixes to guarantee they take effect */
+        html, body, .container-fluid, .row, .col-lg-3, .sidebar {
+            margin-left: 0 !important;
+            padding-left: 0 !important;
+        }
+        .container-fluid {
+            width: 100vw !important;
+            max-width: 100vw !important;
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+    </style>
+</head>
+<body>
+    <script>
+        // Add diagnostic logging
+        (function() {
+          // Store original fetch
+          const originalFetch = window.fetch;
+
+          // Override fetch to log all API calls
+          window.fetch = function(url, options) {
+            const stack = new Error().stack;
+            console.log(`Fetch called for ${url}`, {
+              timestamp: new Date().toISOString(),
+              stack: stack,
+              options: options
+            });
+            return originalFetch.apply(this, arguments);
+          };
+
+          // Log DOM loaded
+          document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOMContentLoaded fired', {
+              timestamp: new Date().toISOString()
+            });
+          });
+
+          // Log window load
+          window.addEventListener('load', function() {
+            console.log('Window load fired', {
+              timestamp: new Date().toISOString()
+            });
+          });
+        })();
+    </script>
+    <header class="app-header">
+        <h1 class="app-title"><strong>Meural</strong> Canvas Image Cropper</h1>
+    </header>
+
+    <div class="container-fluid app-container">
+        <div class="row g-0">
+            <!-- Sidebar with zero left padding -->
+            <div class="col-lg-3 p-0">
+                <div class="sidebar">
+                    <div class="sidebar-header">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span>Image Library</span>
+                            <span class="badge bg-light text-dark" id="image-count">0</span>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button id="btn-immich-sync" class="btn btn-sm btn-primary" title="Sync with Immich input album">
+                                <i class="fas fa-sync-alt"></i> Sync
+                            </button>
+                            <button id="btn-immich-upload" class="btn btn-sm btn-success" title="Upload all processed images to Immich">
+                                <i class="fas fa-cloud-upload-alt"></i> Upload All
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="filter-container">
+                      <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="show-unprocessed-only">
+                        <label class="form-check-label" for="show-unprocessed-only">
+                          Show unprocessed images only
+                        </label>
+                      </div>
+                    </div>
+
+                    <div id="image-grid" class="image-grid-container" style="display: block;">
+                        <div class="text-center p-4">
+                            <div class="spinner-border text-secondary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Loading images...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main content area -->
+            <div class="col-lg-9 p-0">
+                <!-- Container for both views -->
+                <div class="view-container">
+                    <div id="editor-view" class="main-content">
+                        <div class="stage-indicator">
+                            <div class="stage-item">
+                                <div id="stage-1" class="stage-dot active">
+                                    <i class="fas fa-portrait"></i>
+                                </div>
+                                <div class="stage-label active" id="stage-1-label">Portrait</div>
+                            </div>
+                            <div class="stage-item">
+                                <div id="stage-2" class="stage-dot">
+                                    <i class="fas fa-image"></i>
+                                </div>
+                                <div class="stage-label" id="stage-2-label">Landscape</div>
+                            </div>
+                            <div class="stage-item">
+                                <div id="stage-3" class="stage-dot">
+                                    <i class="fas fa-check"></i>
+                                </div>
+                                <div class="stage-label" id="stage-3-label">Review</div>
+                            </div>
+                        </div>
+
+                        <h2 id="stage-name" class="stage-title"><strong>Portrait</strong> Crop (1080×1920)</h2>
+
+                        <!-- Updated image container with position: relative for proper crop rectangle positioning -->
+                        <div class="editor-container" id="editor-container">
+                            <img id="current-image" src="" alt="" style="display:none;">
+                            <div id="crop-overlay" class="crop-overlay" style="display: none;"></div>
+                            <div id="crop-rectangle" class="crop-rectangle" style="display: none;">
+                                <div class="crop-handle top-left"></div>
+                                <div class="crop-handle top-right"></div>
+                                <div class="crop-handle bottom-left"></div>
+                                <div class="crop-handle bottom-right"></div>
+                            </div>
+                        </div>
+
+                        <div id="preview-view" style="display: none;">
+                            <div class="frame-preview-container">
+                                <div class="frame-preview-item" id="portrait-preview">
+                                    <div class="frame-label">Portrait (1080×1920)</div>
+                                    <div class="photo-frame">
+                                        <div class="frame-mat">
+                                            <img id="portrait-preview-img" src="" alt="Portrait crop">
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="frame-preview-item" id="landscape-preview">
+                                    <div class="frame-label">Landscape (1920×1080)</div>
+                                    <div class="photo-frame">
+                                        <div class="frame-mat">
+                                            <img id="landscape-preview-img" src="" alt="Landscape crop">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="workflow-controls">
+                            <button id="btn-back" class="btn btn-meural btn-secondary" disabled>
+                                <i class="fas fa-arrow-left"></i> Back
+                            </button>
+                            <button id="btn-skip" class="btn btn-meural btn-warning">
+                                <i class="fas fa-forward"></i> Skip Portrait
+                            </button>
+                            <button id="btn-reset" class="btn btn-meural btn-danger">
+                                <i class="fas fa-redo"></i> Reset
+                            </button>
+                            <button id="btn-meural-preview" class="btn btn-meural btn-secondary">
+                                <i class="fas fa-tv"></i> Preview on Meural
+                            </button>
+                            <button id="btn-crop" class="btn btn-meural">
+                                Crop and Continue <i class="fas fa-arrow-right"></i>
+                            </button>
+                            <button id="btn-save" class="btn btn-meural btn-success" style="display: none;">
+                                <i class="fas fa-save"></i> Upload Crops
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="no-image-view" class="main-content" style="display: none;">
+                        <div class="no-image-container">
+                            <div class="no-image-icon">
+                                <i class="fas fa-images"></i>
+                            </div>
+                            <h4>No Images Available</h4>
+                            <p class="text-muted">No images found in the Immich input album. Use the Sync button to check for new images.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Global state & initialization tracker with init protection
+        window.APP_STATE = {
+            initialized: false,
+            firstImageLoad: true,
+            syncing: false,
+            imageList: [],
+            currentImage: null,
+            currentStage: 1,
+            portraitCrop: { x: 0, y: 0, width: 0, height: 0 },
+            landscapeCrop: { x: 0, y: 0, width: 0, height: 0 }
+        };
+        window.ELEMENTS = {};
+
+        // Block duplicate initialization
+        window.initRequested = false;
+    </script>
+    <script src="/static/js/config-service.js"></script>
+    <script src="/static/js/ui-controller.js"></script>
+    <script src="/static/js/api-service.js"></script>
+    <script src="/static/js/image-loader.js"></script>
+    <script src="/static/js/crop-engine.js"></script>
+    <script src="/static/js/main.js"></script>
+    <script src="/static/js/meural-service.js"></script>
+    <script>
+        // Initialize config before starting the app
+        initializeConfig().then(() => {
+            // Update dimension labels
+            const portraitDims = getDimensions('portrait');
+            const landscapeDims = getDimensions('landscape');
+            document.querySelector('#stage-name').innerHTML = `<strong>Portrait</strong> Crop (${portraitDims.width}×${portraitDims.height})`;
+            document.querySelector('#portrait-preview h5').innerText = `Portrait (${portraitDims.width}×${portraitDims.height})`;
+            document.querySelector('#landscape-preview h5').innerText = `Landscape (${landscapeDims.width}×${landscapeDims.height})`;
+        });
+    </script>
+</body>
+</html>
