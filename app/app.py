@@ -23,6 +23,8 @@ from utils.file_handler import (
 from utils.image_processor import crop_image
 from utils.meural_handler import MeuralHandler
 
+from utils.meural_upload import MeuralUpload
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -39,6 +41,7 @@ app = Flask(__name__, static_url_path="/static", static_folder="static")
 logging.info(f"Initializing connection to Immich at {config.IMMICH_URL}")
 immich_handler = ImmichHandler()
 meural_handler = MeuralHandler(config.MEURAL_DEVICES)
+meural_upload = MeuralUpload(config.MEURAL_USERNAME, config.MEURAL_PASSWORD)
 
 # Global sync state
 sync_lock = threading.Lock()
@@ -394,6 +397,9 @@ def complete_image():
                 immich_handler.output_album_id,
                 original_asset_id=asset_id,
             )
+
+            meural_upload.upload_image(portrait_path)
+
             if response.get("id"):
                 uploaded_files.append(
                     {
@@ -410,6 +416,9 @@ def complete_image():
                 immich_handler.output_album_id,
                 original_asset_id=asset_id,
             )
+
+            meural_upload.upload_image(landscape_path)
+
             if response.get("id"):
                 uploaded_files.append(
                     {
