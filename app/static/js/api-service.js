@@ -200,11 +200,13 @@ function completeImage() {
                 }
             }
 
-            // Find next image
-            const nextImage = imageList.find(img =>
-                img.status !== 'completed' &&
-                (img.asset_id !== currentImage.asset_id || img.filename !== currentImage.filename)
+            // Find next image after the current image in the list
+            const currentIndex = imageList.findIndex(img =>
+                img.asset_id === currentImage.asset_id && img.filename === currentImage.filename
             );
+            const nextImage = (currentIndex >= 0)
+                ? imageList.slice(currentIndex + 1).find(img => img.status !== 'completed')
+                : undefined;
 
             if (nextImage) {
                 // Use requestAnimationFrame to ensure state is consistent
