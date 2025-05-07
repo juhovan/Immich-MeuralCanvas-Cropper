@@ -208,8 +208,10 @@ class ImmichHandler:
                 "asset_id": asset_id,
                 "original_filename": asset_info.get("originalFileName", ""),
                 "file_path": file_path,
-                "created_at": asset_info.get("createdAt", ""),
-                "modified_at": asset_info.get("modifiedAt", ""),
+                "created_at": asset_info.get("fileCreatedAt", ""),
+                "modified_at": asset_info.get("fileModifiedAt", ""),
+                "local_date_time": asset_info.get("localDateTime", ""),
+                "exif": asset_info.get("exifInfo", {})
             }
 
             # Save to metadata file
