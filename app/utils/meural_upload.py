@@ -28,7 +28,7 @@ class MeuralUpload:
     opener.addheaders=[('User-Agent','Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/36.0.1941.0 Safari/537.36')]
     urllib.request.install_opener(opener)
 
-    def upload_image_data(self, image_path, path="/items"):
+    def _upload_image_data(self, image_path, path="/items"):
         if (self.token_time - time.time()) > 300:
             self.authenticate()
 
@@ -43,7 +43,7 @@ class MeuralUpload:
 
         return r.get("data", {}).get("id")
 
-    def set_image_metadata(self, image_id, name, description, medium, year):
+    def _set_image_metadata(self, image_id, name, description, medium, year):
         if (self.token_time - time.time()) > 300:
             self.authenticate()
 
@@ -66,8 +66,23 @@ class MeuralUpload:
             return False
         return True
 
+    def _add_to_playlist(self, image_id, playlist_id):
+        if (self.token_time - time.time()) > 300:
+            self.authenticate()
+
+        headers = {"Authorization": "Token " + self.token}
+        r = requests.post(
+            f"{self.base_url}/galleries/{playlist_id}/items/{image_id}",
+            headers=headers,
+        ).json()
+        logging.info(f"Meural add to playlist response: {r}")
+        if "error" in r:
+            logging.error(f"Error adding image {image_id} to playlist {playlist_id}: {r['error']}")
+            return False
+        return True
+
     def upload_image(self, image_path, metadata):
-        image_id = self.upload_image_data(image_path)
+        image_id = self._upload_image_data(image_path)
         if not image_id:
             return False
 
@@ -94,5 +109,10 @@ class MeuralUpload:
 
         description = f"{make} {model} {lens_model} {exposure_time}{f_number}{iso}{focal_length}".strip()
 
-        self.set_image_metadata(image_id, name, description, medium, year)
+        set_image_metdata = self._set_image_metadata(image_id, name, description, medium, year)
+        add_to_playlist = self._add_to_playlist(image_id, config.MEURAL_PLAYLIST_ID)
+        if not set_image_metdata or not add_to_playlist:
+            logging.error(f"Failed to set metadata or add image {image_id} to playlist.")
+            return False
+        logging.info(f"Image {image_id} uploaded and metadata set successfully.")
         return True
