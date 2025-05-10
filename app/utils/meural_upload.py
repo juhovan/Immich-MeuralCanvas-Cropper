@@ -43,13 +43,13 @@ class MeuralUpload:
 
         return r.get("data", {}).get("id")
 
-    def set_image_metadata(self, image_id, title, description, medium, year):
+    def set_image_metadata(self, image_id, name, description, medium, year):
         if (self.token_time - time.time()) > 300:
             self.authenticate()
 
         headers = {"Authorization": "Token " + self.token}
         data = {
-            "title": title,
+            "name": name,
             "description": description,
             "medium": medium,
             "year": year
@@ -60,25 +60,39 @@ class MeuralUpload:
             json=data
         ).json()
 
+        logging.info(f"Meural metadata response: {r}")
+        if "error" in r:
+            logging.error(f"Error setting metadata for image {image_id}: {r['error']}")
+            return False
+        return True
+
     def upload_image(self, image_path, metadata):
         image_id = self.upload_image_data(image_path)
         if not image_id:
             return False
 
         exif = metadata["exif"]
-        title = exif.get("description", metadata["original_filename"])
-        medium = exif.get("city", "") + " " + exif.get("state", "") + " " + exif.get("country", "")
+        name = (exif.get("description") or metadata["original_filename"])
+        medium = ((exif.get("city") or "") + " " +
+                  (exif.get("state") or "") + " " +
+                  (exif.get("country") or "")).strip()
         raw_date = metadata["local_date_time"]
         try:
+            raw_date = raw_date.replace("Z", "+00:00")
             dt = datetime.fromisoformat(raw_date)
-            year = dt.strftime("%d.%m.%Y %H:%M:%S")
+            year = dt.strftime("%d.%m.%Y")
         except Exception:
-            year = raw_date
-        description = (
-            exif.get("make", "") + " " + exif.get("model", "") + " " +
-            exif.get("lens_model", "") + " " + exif.get("exposure_time", "") + "s f/" +
-            exif.get("f_number", "") + " ISO" + exif.get("iso", "") + " " +
-            exif.get("focal_length", "") + "mm"
-        )
-        self.set_image_metadata(image_id, title, description, medium, year)
+            year = raw_date[:16] if len(raw_date) > 16 else raw_date
+
+        make = exif.get("make") or ""
+        model = exif.get("model") or ""
+        lens_model = exif.get("lensModel") or ""
+        exposure_time = "" if exif.get("exposureTime") is None else f"{exif.get('exposureTime')}s "
+        f_number = "" if exif.get("fNumber") is None else f"f/{exif.get('fNumber')} "
+        iso = "" if exif.get("iso") is None else f"ISO{exif.get('iso')} "
+        focal_length = "" if exif.get("focalLength") is None else f"{exif.get('focalLength')}mm"
+
+        description = f"{make} {model} {lens_model} {exposure_time}{f_number}{iso}{focal_length}".strip()
+
+        self.set_image_metadata(image_id, name, description, medium, year)
         return True
