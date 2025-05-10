@@ -30,6 +30,15 @@ def crop_image(asset_id, orientation, crop_data):
 
         # Open the image and apply EXIF orientation
         img = Image.open(img_path)
+
+        # Extract original EXIF data
+        exif_data = None
+        try:
+            if 'exif' in img.info:
+                exif_data = img.info['exif']
+        except Exception as e:
+            logging.warning(f"Could not extract EXIF data: {str(e)}")
+
         img = ImageOps.exif_transpose(img)
 
         # Extract crop coordinates
@@ -67,10 +76,23 @@ def crop_image(asset_id, orientation, crop_data):
         paste_y = (target_height - new_height) // 2
         output_img.paste(resized_img, (paste_x, paste_y))
 
-        # Create minimal EXIF data with normal orientation
-        exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
-        exif_dict["0th"][piexif.ImageIFD.Orientation] = 1  # Normal orientation
-        exif_bytes = piexif.dump(exif_dict)
+        # Process EXIF data - keep original but override orientation
+        exif_bytes = None
+        if exif_data:
+            try:
+                exif_dict = piexif.load(exif_data)
+                # Override orientation to normal
+                if "0th" in exif_dict:
+                    exif_dict["0th"][piexif.ImageIFD.Orientation] = 1  # Normal orientation
+                exif_bytes = piexif.dump(exif_dict)
+            except Exception as e:
+                logging.warning(f"Could not process EXIF data: {str(e)}")
+
+        # If no valid EXIF data was processed, create minimal EXIF with normal orientation
+        if not exif_bytes:
+            exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
+            exif_dict["0th"][piexif.ImageIFD.Orientation] = 1  # Normal orientation
+            exif_bytes = piexif.dump(exif_dict)
 
         # Save to output folder with EXIF data
         output_filename = f"{asset_id}_{orientation}.jpg"
