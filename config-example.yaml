@@ -12,6 +12,9 @@ immich:
 
 # Meural Canvas configuration
 meural:
+  username: "your_meural_username"
+  password: "your_meural_password"
+  playlist_id: "123456"
   devices:
     - name: "Living Room"
       ip: "192.168.1.136"

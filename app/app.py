@@ -19,9 +19,12 @@ from utils.file_handler import (
     get_asset_id_from_filename,
     get_filename_from_asset_id,
     get_asset_mapping,
+    get_asset_metadata,
 )
 from utils.image_processor import crop_image
 from utils.meural_handler import MeuralHandler
+
+from utils.meural_upload import MeuralUpload
 
 # Configure logging
 logging.basicConfig(
@@ -39,6 +42,7 @@ app = Flask(__name__, static_url_path="/static", static_folder="static")
 logging.info(f"Initializing connection to Immich at {config.IMMICH_URL}")
 immich_handler = ImmichHandler()
 meural_handler = MeuralHandler(config.MEURAL_DEVICES)
+meural_upload = MeuralUpload(config.MEURAL_USERNAME, config.MEURAL_PASSWORD)
 
 # Global sync state
 sync_lock = threading.Lock()
@@ -387,6 +391,8 @@ def complete_image():
             config.OUTPUT_FOLDER, "landscape", landscape_filename
         )
 
+        metadata = get_asset_metadata(asset_id)
+
         uploaded_files = []
         if os.path.exists(portrait_path):
             response = immich_handler.upload_asset(
@@ -394,6 +400,9 @@ def complete_image():
                 immich_handler.output_album_id,
                 original_asset_id=asset_id,
             )
+
+            meural_upload.upload_image(portrait_path, metadata)
+
             if response.get("id"):
                 uploaded_files.append(
                     {
@@ -410,6 +419,9 @@ def complete_image():
                 immich_handler.output_album_id,
                 original_asset_id=asset_id,
             )
+
+            meural_upload.upload_image(landscape_path, metadata)
+
             if response.get("id"):
                 uploaded_files.append(
                     {

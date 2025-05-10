@@ -253,3 +253,20 @@ def get_asset_mapping():
             logging.error(f"Error reading metadata for {asset_id}: {e}")
 
     return mapping
+
+def get_asset_metadata(asset_id: str):
+    """Get metadata for a specific asset
+
+    Args:
+        asset_id (str): Immich asset ID
+
+    Returns:
+        dict: Asset metadata
+    """
+
+    metadata_dir = os.path.join(INPUT_FOLDER, ".metadata")
+
+    with open(os.path.join(metadata_dir, f"{asset_id}.json"), "r") as f:
+        metadata = json.load(f)
+
+    return metadata

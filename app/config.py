@@ -40,6 +40,9 @@ IMMICH_OUTPUT_ALBUM_ID = config["immich"]["output_album_id"]
 
 # Meural configuration
 MEURAL_DEVICES = config.get("meural", {}).get("devices", [])
+MEURAL_USERNAME = config.get("meural", {}).get("username", "")
+MEURAL_PASSWORD = config.get("meural", {}).get("password", "")
+MEURAL_PLAYLIST_ID = config.get("meural", {}).get("playlist_id", "")
 
 # File paths
 PROGRESS_FILE = os.path.join(TEMP_FOLDER, "progress.json")
