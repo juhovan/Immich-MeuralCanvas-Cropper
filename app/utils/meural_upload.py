@@ -107,7 +107,7 @@ class MeuralUpload:
         iso = "" if exif.get("iso") is None else f"ISO{exif.get('iso')} "
         focal_length = "" if exif.get("focalLength") is None else f"{exif.get('focalLength')}mm"
 
-        description = f"{make} {model} {lens_model} {exposure_time}{f_number}{iso}{focal_length}".strip()
+        description = f"{make} {model} {lens_model} {exposure_time}{f_number}{iso}{focal_length}\n{metadata['original_filename']}".strip()
 
         set_image_metdata = self._set_image_metadata(image_id, name, description, medium, year)
         add_to_playlist = self._add_to_playlist(image_id, config.MEURAL_PLAYLIST_ID)

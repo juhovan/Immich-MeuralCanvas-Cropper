@@ -3,6 +3,7 @@ import requests
 from typing import List, Dict, Any, Optional
 import logging
 from datetime import datetime
+from time import sleep
 from PIL import Image
 from pillow_heif import register_heif_opener
 from config import (
@@ -37,22 +38,30 @@ class ImmichHandler:
 
     def init_api_client(self):
         """Initialize API client with authentication check"""
-        try:
-            # Test authentication by making a request to the server ping endpoint
-            logging.info("Testing Immich API connection...")
-            response = requests.get(
-                f"{self.base_url}/api/server/ping", headers=self.headers
-            )
-            response.raise_for_status()
-            ping_response = response.json()
-            if ping_response.get("res") == "pong":
-                # Successfully connected to Immich server
-                logging.info("Successfully connected to Immich server")
-            else:
-                raise Exception("Invalid ping response from server")
-        except Exception as e:
-            logging.error(f"Failed to initialize Immich API client: {str(e)}")
-            raise
+        counter = 0
+        max_retries = 3
+        while counter < max_retries:
+            try:
+                # Test authentication by making a request to the server ping endpoint
+                logging.info("Testing Immich API connection...")
+                response = requests.get(
+                    f"{self.base_url}/api/server/ping", headers=self.headers
+                )
+                response.raise_for_status()
+                ping_response = response.json()
+                if ping_response.get("res") == "pong":
+                    # Successfully connected to Immich server
+                    logging.info("Successfully connected to Immich server")
+                    break
+                else:
+                    raise Exception("Invalid ping response from server")
+            except Exception as e:
+                logging.error(f"Failed to initialize Immich API client: {str(e)}")
+                if counter >= max_retries:
+                    raise
+                sleep(5 ** counter)  # Exponential backoff
+                logging.info(f"Retrying connection... ({counter + 1}/{max_retries})")
+            counter += 1
 
     def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         """Make an HTTP request to the Immich API"""
