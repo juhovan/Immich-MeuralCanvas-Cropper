@@ -105,6 +105,31 @@ class ImmichHandler:
             return album_data["assets"]
         return []
 
+    # Helper: extract original asset ID from processed filename "<assetId>_<orientation>.<ext>"
+    def _parse_original_asset_id_from_processed_name(self, filename: str) -> Optional[str]:
+        try:
+            if "_" not in filename:
+                return None
+            return filename.split("_", 1)[0]
+        except Exception:
+            return None
+
+    # Helper: delete assets by IDs in batches
+    def _delete_assets(self, asset_ids: List[str]) -> bool:
+        if not asset_ids:
+            return True
+        try:
+            # Immich supports DELETE /api/assets with body {"ids": [...]}
+            batch_size = 100
+            for i in range(0, len(asset_ids), batch_size):
+                batch = asset_ids[i:i+batch_size]
+                logging.info(f"Deleting {len(batch)} assets from Immich output album")
+                self._make_request("DELETE", "/assets", json={"ids": batch})
+            return True
+        except Exception as e:
+            logging.error(f"Failed to delete assets: {e}")
+            return False
+
     def download_asset(self, asset_id: str, save_dir: str) -> tuple[bool, str]:
         """Download an asset from Immich and convert HEIC to JPEG if needed
 
@@ -572,3 +597,51 @@ class ImmichHandler:
                 return base_name
 
         return ""
+
+    # New: remove processed outputs from output album if original asset is not in input album
+    def remove_outputs_not_in_input(self) -> Dict[str, Any]:
+        """
+        Ensure target Immich output album doesn't contain processed images
+        whose originals are missing from the source input album.
+
+        Returns a summary dict with counts and deleted asset IDs.
+        """
+        try:
+            # Gather current originals in input album
+            input_assets = self.get_album_assets(self.input_album_id)
+            input_ids = {a.get("id") for a in input_assets if a.get("id")}
+            logging.info(f"Source album originals: {len(input_ids)}")
+
+            # Scan output album and find processed assets whose base ID is not in input
+            output_assets = self.get_album_assets(self.output_album_id)
+            to_delete: List[str] = []
+            for a in output_assets:
+                name = a.get("originalFileName", "") or ""
+                base_id = self._parse_original_asset_id_from_processed_name(name)
+                if base_id and base_id not in input_ids:
+                    to_delete.append(a.get("id"))
+
+            deleted = []
+            if to_delete:
+                ok = self._delete_assets(to_delete)
+                if ok:
+                    deleted = to_delete
+                else:
+                    logging.error("Failed to delete some or all assets from output album")
+
+            summary = {
+                "checked_output": len(output_assets),
+                "source_originals": len(input_ids),
+                "to_delete": len(to_delete),
+                "deleted": deleted,
+                "success": len(to_delete) == len(deleted),
+            }
+            logging.info(
+                f"Output purge summary: checked={summary['checked_output']} "
+                f"source={summary['source_originals']} to_delete={summary['to_delete']} "
+                f"deleted={len(deleted)}"
+            )
+            return summary
+        except Exception as e:
+            logging.error(f"Error pruning output album assets: {e}")
+            return {"success": False, "error": str(e)}
