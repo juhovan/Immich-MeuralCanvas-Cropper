@@ -120,6 +120,13 @@ try:
     downloaded_assets = immich_handler.sync_input_images(config.INPUT_FOLDER)
     logging.info(f"Initial sync complete. Downloaded {len(downloaded_assets)} files")
 
+    # Ensure output album doesn't contain items whose originals aren't in input album
+    purge_summary = immich_handler.remove_outputs_not_in_input()
+    logging.info(f"Purge summary on startup: {purge_summary}")
+
+    logging.info("Sync to Meural playlist")
+    meural_upload.sync_playlist_with_immich()
+
 except Exception as e:
     logging.error(f"Initial Immich connection/sync failed: {e}")
     processed_images = load_progress()  # Still load progress even if sync fails
@@ -317,14 +324,22 @@ def sync_with_immich():
             global asset_mapping
             asset_mapping = get_asset_mapping()
 
+            # After sync, purge output album of items whose source is no longer present
+            purge_summary = immich_handler.remove_outputs_not_in_input()
+            logging.info(f"Purge summary: {purge_summary}")
+
             # Get current images with updated mapping
             current_images = get_image_list(processed_images)
+
+            logging.info("Sync to Meural playlist")
+            meural_upload.sync_playlist_with_immich()
 
             return jsonify(
                 {
                     "success": True,
                     "files": downloaded_assets,
                     "images": current_images,
+                    "purge": purge_summary,
                     "request_id": request_id,
                     "timestamp": time.time(),
                 }
@@ -401,7 +416,7 @@ def complete_image():
                 original_asset_id=asset_id,
             )
 
-            meural_upload.upload_image(portrait_path, metadata)
+            #meural_upload.upload_image(portrait_path, metadata)
 
             if response.get("id"):
                 uploaded_files.append(
@@ -420,7 +435,7 @@ def complete_image():
                 original_asset_id=asset_id,
             )
 
-            meural_upload.upload_image(landscape_path, metadata)
+            #meural_upload.upload_image(landscape_path, metadata)
 
             if response.get("id"):
                 uploaded_files.append(
