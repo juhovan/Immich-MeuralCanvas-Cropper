@@ -36,6 +36,7 @@ class MeuralUpload:
                 AuthParameters={"USERNAME": self.username, "PASSWORD": self.password},
             )
             if "AuthenticationResult" in response:
+                logging.info("Authentication: Successfully authenticated with Meural API")
                 self.token = response["AuthenticationResult"]["AccessToken"]
                 self.token_time = time.time()
                 return self.token
@@ -43,13 +44,13 @@ class MeuralUpload:
                 logging.error("Authentication failed: No AuthenticationResult in response.")
                 return None
         except client.exceptions.NotAuthorizedException as auth_err:
-            logging.error(f"Not authorized: {auth_err}")
+            logging.error(f"Authentication: Not authorized: {auth_err}")
             return None
         except client.exceptions.UserNotFoundException as user_err:
-            logging.error(f"User not found: {user_err}")
+            logging.error(f"Authentication: User not found: {user_err}")
             return None
         except Exception as e:
-            logging.error(f"Unexpected error during authentication: {e}")
+            logging.error(f"Authentication: Unexpected error during authentication: {e}")
             return None
 
 
@@ -174,7 +175,7 @@ class MeuralUpload:
         f_number = "" if exif.get("fNumber") is None else f"f/{exif.get('fNumber')} "
         iso = "" if exif.get("iso") is None else f"ISO{exif.get('iso')} "
         focal_length = "" if exif.get("focalLength") is None else f"{exif.get('focalLength')}mm"
-        
+
         return f"{make} {model} {lens_model} {exposure_time}{f_number}{iso}{focal_length}".strip()
 
     def _metadata_changed(self, current_metadata: Dict[str, Any], current_description: str) -> bool:
@@ -445,6 +446,7 @@ class MeuralUpload:
           - If processed files are not found locally, try to locate processed assets in Immich output
             album and download them before uploading to Meural.
         """
+        logging.info("Starting sync of Meural playlist with Immich album...")
         playlist_id = playlist_id or getattr(config, "MEURAL_PLAYLIST_ID", None)
         immich_album_id = immich_album_id or getattr(config, "IMMICH_OUTPUT_ALBUM_ID", None)
 
@@ -480,7 +482,7 @@ class MeuralUpload:
             try:
                 metadata = get_asset_metadata(asset_id)
                 current_desc = meural_map.get(asset_id, {}).get("description", "")
-                
+
                 if self._metadata_changed(metadata, current_desc):
                     logging.info(f"Detected metadata changes for asset {asset_id}")
                     to_update.append((asset_id, metadata))
@@ -553,9 +555,9 @@ class MeuralUpload:
                         (exif.get("state") or "") + " " +
                         (exif.get("country") or "")).strip()
                 # ...existing date parsing code...
-                
+
                 description = f"{self._format_exif_description(exif)}\n{asset_id}".strip()
-                
+
                 if self._set_image_metadata(item_id, name, description, medium, year):
                     added.append({"asset_id": asset_id, "action": "metadata_updated"})
                 else:
