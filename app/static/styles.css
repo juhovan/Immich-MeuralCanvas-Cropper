@@ -39,9 +39,10 @@ html, body, .container-fluid, .row, .col-lg-3, .sidebar {
     background-color: #333 !important;
     margin: 0 !important;
     padding: 0 !important;
-    height: calc(100vh - 200px) !important;
-    min-height: 400px !important;
+    height: calc(100vh - 250px) !important; /* Increased space for bottom controls */
+    min-height: 300px !important; /* Reduced min-height to accommodate smaller screens */
     width: 100% !important;
+    flex: 1 !important; /* Allow container to grow and shrink as needed */
 }
 
 /* Ensure image has proper positioning and sizing */
@@ -221,6 +222,8 @@ body {
     flex-direction: column !important;
     height: calc(100vh - 70px) !important;
     overflow: hidden !important;
+    min-height: 500px !important; /* Ensure minimal height for content */
+    position: relative; /* Ensure proper positioning */
 }
 
 /* Crop rectangle */
@@ -272,16 +275,18 @@ body {
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
-    gap: 20px;
+    gap: 15px;
     width: 100%;
-    padding: 20px;
+    padding: 10px;
+    max-height: calc(100vh - 250px);
+    overflow-y: auto;
 }
 
 .frame-preview-item {
     flex: 1;
-    min-width: 300px;
-    max-width: calc(50% - 20px);
-    margin-bottom: 20px;
+    min-width: 200px; /* Reduced minimum width for smaller screens */
+    max-width: calc(50% - 15px);
+    margin-bottom: 15px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -291,15 +296,16 @@ body {
     background-color: #b08968;
     border-radius: 2px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1), 0 8px 16px rgba(0, 0, 0, 0.1);
-    padding: 15px;
+    padding: min(15px, 3vw); /* Responsive padding */
     position: relative;
     transition: transform 0.3s ease;
     display: inline-block;
     width: auto;
+    max-width: 95%;
 }
 
 .photo-frame:hover {
-    transform: translateY(-5px);
+    transform: translateY(-3px);
 }
 
 .frame-mat {
@@ -335,17 +341,42 @@ body {
 }
 
 #portrait-preview .frame-mat img {
-    max-height: 400px;
+    max-height: min(400px, calc(100vh - 300px)); /* Dynamically adjust based on viewport height */
     width: auto;
     height: auto;
     display: block;
+    object-fit: contain;
+    margin: 0 auto;
 }
 
 /* Landscape-specific styles */
+#landscape-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+#landscape-preview .photo-frame {
+    width: auto;
+    display: inline-block;
+}
+
+#landscape-preview .frame-mat {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
 #landscape-preview .frame-mat img {
     max-width: 100%;
-    max-height: 400px;
+    max-height: min(400px, calc(100vh - 300px)); /* Dynamically adjust based on viewport height */
+    width: auto;
+    height: auto;
     display: block;
+    object-fit: contain;
+    margin: 0 auto;
 }
 
 /* Preview container */
@@ -387,18 +418,19 @@ body {
 
 /* Workflow controls */
 .workflow-controls {
-    padding: 10px 0;
+    padding: 10px;
     display: flex;
     justify-content: space-between;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: 8px;
     width: 100%;
-    flex-shrink: 0;
-    margin-top: 10px;
-    position: relative;
+    z-index: 100;
+    position: sticky;
     bottom: 0;
-    left: 0;
-    z-index: 10;
+    background-color: white;
+    box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+    min-height: 60px;
+    flex-shrink: 0; /* Prevent shrinking */
 }
 
 /* Stage indicator */
@@ -525,12 +557,28 @@ body {
     min-height: 400px;
     text-align: center;
     color: #6c757d;
+    padding: 20px;
+    max-width: 600px;
+    margin: 0 auto;
 }
 
 .no-image-icon {
-    font-size: 5rem;
+    font-size: 6rem;
     margin-bottom: 1.5rem;
-    color: #dee2e6;
+    color: var(--primary-color);
+    opacity: 0.8;
+    background-color: rgba(58, 90, 64, 0.1);
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.3s ease;
+}
+
+.no-image-icon:hover {
+    transform: scale(1.05);
 }
 
 /* Meural Device Dialog Styles */
@@ -719,16 +767,58 @@ body {
   position: absolute;
   top: 5px;
   right: 5px;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   color: white;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   z-index: 5;
+}
+
+/* Adjust container for split icons */
+.image-status:has(.split-status-icons) {
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  width: 50px; /* Accommodate two 22px circles with gap */
+}
+
+/* Split status icons for images with crops - separate circular icons */
+.split-status-icons {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  background: none;
+}
+
+.status-icon-circle {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background-color: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.status-icon-circle i {
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 600;
 }
 
 .image-grid-item .image-name {
@@ -766,7 +856,13 @@ body {
     left: 0;
     width: 100%;
     height: 100%;
-    z-index: 1; /* Lower z-index to appear behind */
+    z-index: 3; /* Higher z-index to ensure it's shown on top */
+    pointer-events: none; /* Allow clicks to pass through to sidebar */
+    display: block; /* Show by default */
+}
+
+.no-image-container {
+    pointer-events: auto; /* Restore pointer events for the content */
 }
 
 /* Prevent views from showing simultaneously */
@@ -798,6 +894,7 @@ body.has-image #no-image-view {
 @media (max-width: 768px) {
     .frame-preview-container {
         flex-direction: column;
+        max-height: calc(100vh - 220px); /* Reduced height for preview container */
     }
 
     .frame-preview-item {
@@ -817,7 +914,18 @@ body.has-image #no-image-view {
     }
 
     .editor-container {
-        height: calc(100vh - 280px) !important;
+        height: calc(100vh - 240px) !important; /* Reduced height to ensure buttons are visible */
+        min-height: 250px !important;
+    }
+
+    /* Ensure workflow controls stay visible */
+    .workflow-controls {
+        position: sticky;
+        bottom: 0;
+        background: white;
+        padding: 8px;
+        z-index: 100;
+        box-shadow: 0 -3px 10px rgba(0,0,0,0.1);
     }
 }
 
@@ -862,7 +970,12 @@ body.has-image #no-image-view {
     }
 
     .workflow-controls {
-        padding: 5px 0;
+        padding: 5px 10px;
+        position: sticky;
+        bottom: 0;
+        background: white;
+        z-index: 100;
+        box-shadow: 0 -2px 8px rgba(0,0,0,0.1);
     }
 
     .btn-meural {
@@ -878,6 +991,22 @@ body.has-image #no-image-view {
 
     .stage-label {
         font-size: 0.75rem;
+    }
+
+    .editor-container {
+        height: calc(100vh - 220px) !important; /* Reduce height for smaller screens */
+        min-height: 220px !important;
+    }
+
+    /* Reduce the preview height */
+    .frame-preview-container {
+        max-height: calc(100vh - 200px);
+    }
+
+    /* Make images in preview smaller */
+    #portrait-preview .frame-mat img,
+    #landscape-preview .frame-mat img {
+        max-height: 300px;
     }
 }
 
@@ -910,5 +1039,339 @@ body.has-image #no-image-view {
     .btn-meural {
         padding: 2px 8px;
         font-size: 0.8rem;
+    }
+}
+/* Landing page enhancements */
+.no-image-container h3 {
+    margin-bottom: 20px;
+    color: var(--dark-color);
+    font-weight: 500;
+}
+
+.no-image-container p {
+    margin-bottom: 15px;
+    max-width: 450px;
+}
+
+/* Responsive adjustments for landing page */
+@media (max-width: 768px) {
+    .no-image-icon {
+        font-size: 4rem;
+        width: 120px;
+        height: 120px;
+        margin-bottom: 1rem;
+    }    .no-image-container h3 {
+        font-size: 1.5rem;
+        margin-bottom: 15px;
+    }
+
+    .no-image-container {
+        min-height: 300px;
+        padding: 10px;
+    }
+
+    .no-image-container p {
+        font-size: 0.9rem;
+        max-width: 100%;
+    }
+}
+
+/* Manage Modal Styles */
+.manage-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.8);
+    z-index: 2000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.manage-modal-content {
+    background: white;
+    border-radius: 12px;
+    width: 95%;
+    max-width: 1400px;
+    height: 90vh;
+    max-height: 900px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+}
+
+.manage-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 30px;
+    border-bottom: 1px solid #eee;
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+    color: white;
+}
+
+.manage-modal-header h2 {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+.manage-modal-header h2 i {
+    margin-right: 10px;
+}
+
+.manage-modal-close {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.5rem;
+    cursor: pointer;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s;
+}
+
+.manage-modal-close:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.manage-modal-body {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.manage-table-container {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+}
+
+.manage-table-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #6c757d;
+}
+
+.manage-table-loading p {
+    margin-top: 15px;
+    font-size: 1.1rem;
+}
+
+.manage-table-wrapper {
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: auto;
+}
+
+.manage-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+}
+
+.manage-table th {
+    background: #f8f9fa;
+    color: #495057;
+    font-weight: 600;
+    padding: 15px;
+    text-align: center;
+    border-bottom: 2px solid #dee2e6;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.manage-table td {
+    padding: 20px 15px;
+    text-align: center;
+    border-bottom: 1px solid #eee;
+    vertical-align: top;
+}
+
+.manage-table tr:hover {
+    background-color: #f8f9fa;
+}
+
+.original-column {
+    width: 33.33%;
+}
+
+.portrait-column {
+    width: 33.33%;
+}
+
+.landscape-column {
+    width: 33.33%;
+}
+
+.manage-image-preview {
+    max-width: 150px;
+    max-height: 150px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    margin-bottom: 15px;
+    object-fit: cover;
+}
+
+.manage-image-info {
+    margin-bottom: 15px;
+}
+
+.manage-image-filename {
+    font-size: 0.9rem;
+    color: #6c757d;
+    margin-bottom: 5px;
+    word-break: break-word;
+}
+
+.manage-image-dimensions {
+    font-size: 0.8rem;
+    color: #9c9c9c;
+}
+
+.manage-image-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+}
+
+.manage-action-btn {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 100px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+}
+
+.manage-action-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.manage-action-btn.delete {
+    background: #dc3545;
+    color: white;
+}
+
+.manage-action-btn.delete:hover {
+    background: #c82333;
+}
+
+.manage-action-btn.reupload {
+    background: #28a745;
+    color: white;
+}
+
+.manage-action-btn.reupload:hover {
+    background: #218838;
+}
+
+.manage-action-btn.recrop {
+    background: var(--primary-color);
+    color: white;
+}
+
+.manage-action-btn.recrop:hover {
+    background: var(--secondary-color);
+}
+
+.manage-action-btn.delete-original {
+    background: #ffc107;
+    color: #212529;
+}
+
+.manage-action-btn.delete-original:hover {
+    background: #e0a800;
+}
+
+.manage-no-image {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #6c757d;
+    font-style: italic;
+    padding: 20px;
+}
+
+.manage-no-image i {
+    font-size: 2rem;
+    margin-bottom: 10px;
+    opacity: 0.5;
+}
+
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #6c757d;
+    padding: 40px;
+}
+
+.empty-state h4 {
+    margin: 20px 0 10px 0;
+}
+
+.empty-state p {
+    margin: 0;
+}
+
+/* Responsive adjustments for manage modal */
+@media (max-width: 768px) {
+    .manage-modal {
+        padding: 10px;
+    }
+
+    .manage-modal-content {
+        width: 100%;
+        height: 95vh;
+    }
+
+    .manage-modal-header {
+        padding: 15px 20px;
+    }
+
+    .manage-modal-header h2 {
+        font-size: 1.3rem;
+    }
+
+    .manage-table th,
+    .manage-table td {
+        padding: 10px 8px;
+    }
+
+    .manage-image-preview {
+        max-width: 100px;
+        max-height: 100px;
+    }
+
+    .manage-action-btn {
+        min-width: 80px;
+        font-size: 0.8rem;
+        padding: 5px 8px;
     }
 }

@@ -97,20 +97,34 @@ function renderImageList() {
             let statusClass = '';
             let statusIcon = '<i class="fas fa-circle text-secondary"></i>';
 
-            switch (image.status) {
-                case 'completed':
+            // Determine if image has any crops to show split view
+            const hasCrops = image.status && image.status !== 'unprocessed';
+
+            if (hasCrops) {
+                // Show split icons for images with at least one crop
+                const hasPortrait = image.status === 'portrait' || image.status === 'both';
+                const hasLandscape = image.status === 'landscape' || image.status === 'both';
+
+                const portraitClass = hasPortrait ? 'text-success' : 'text-secondary';
+                const landscapeClass = hasLandscape ? 'text-success' : 'text-secondary';
+
+                statusIcon = `
+                    <div class="split-status-icons">
+                        <div class="status-icon-circle">
+                            <i class="fas fa-mobile-alt ${portraitClass}" title="Portrait"></i>
+                        </div>
+                        <div class="status-icon-circle">
+                            <i class="fas fa-desktop ${landscapeClass}" title="Landscape"></i>
+                        </div>
+                    </div>
+                `;
+
+                if (image.status === 'both') {
                     statusClass = 'completed';
-                    statusIcon = '<i class="fas fa-check-circle"></i>';
-                    break;
-                case 'portrait':
-                    statusIcon = '<i class="fas fa-portrait text-primary"></i>';
-                    break;
-                case 'landscape':
-                    statusIcon = '<i class="fas fa-image text-primary"></i>';
-                    break;
-                case 'both':
-                    statusIcon = '<i class="fas fa-images text-success"></i>';
-                    break;
+                }
+            } else {
+                // Single icon for uncropped images
+                statusIcon = '<i class="fas fa-circle text-secondary"></i>';
             }
 
             // Get the display name (original_filename if available, else filename)
@@ -255,10 +269,25 @@ function selectImage(identifier) {
     isSelectingImage = true;
 
     try {
-        // Reset state
+        // Reset flags for new image selection
+        window._loadingNewImage = false;
+        window._cropRectangleInitialized = false;
+
+        // Reset state and clear UI
         window.APP_STATE.currentStage = 1;
         window.APP_STATE.portraitCrop = { x: 0, y: 0, width: 0, height: 0 };
         window.APP_STATE.landscapeCrop = { x: 0, y: 0, width: 0, height: 0 };
+
+        // Explicitly reset the view when switching images
+        if (window.ELEMENTS.previewViewEl) {
+            window.ELEMENTS.previewViewEl.style.display = 'none';
+        }
+        if (window.ELEMENTS.cropOverlayEl) {
+            window.ELEMENTS.cropOverlayEl.style.display = 'none';
+        }
+        if (window.ELEMENTS.cropRectangleEl) {
+            window.ELEMENTS.cropRectangleEl.style.display = 'none';
+        }
 
         // Update selection in both list and grid views
         document.querySelectorAll('.image-list-item, .image-grid-item').forEach(item => {
@@ -300,6 +329,7 @@ function selectImage(identifier) {
             });
     } catch (error) {
         console.error('Error selecting image:', error);
+        window._loadingNewImage = false; // Reset flag on error
         isSelectingImage = false;
     }
 }
@@ -347,14 +377,19 @@ function loadImageAndInitCrop(identifier) {
     const btnSaveEl = window.ELEMENTS.btnSaveEl;
     const btnSkipEl = window.ELEMENTS.btnSkipEl;
 
+    // Reset viewport resizing flag when loading a new image
+    // This ensures we properly use saved crop data if available
+    window._viewportResizing = false;
+
+    // Set flag to indicate we're loading a new image (prevents forceImageFit from overriding)
+    window._loadingNewImage = true;
+
     // Set up image loading with direct sizing
     currentImageEl.onload = function() {
         console.log("Image loaded successfully:", this.naturalWidth, this.naturalHeight);
 
-        // Show editor view first
-        window.ELEMENTS.noImageViewEl.style.display = 'none';
-        window.ELEMENTS.editorViewEl.style.display = 'block';
-        document.body.classList.add('has-image');
+        // Show editor view properly through the view controller
+        showView('editor-view');
 
         // Make image visible
         currentImageEl.style.display = 'block';
@@ -386,11 +421,19 @@ function loadImageAndInitCrop(identifier) {
 
         console.log("Setting image size to:", newWidth, newHeight);
 
-        // Update UI
+        // Update UI - ensure we're in the correct state for a new image
         previewViewEl.style.display = 'none';
         btnCropEl.style.display = 'block';
         btnSaveEl.style.display = 'none';
         btnSkipEl.style.display = 'block';
+
+        // Reset crop elements when loading a new image
+        if (window.ELEMENTS.cropOverlayEl) {
+            window.ELEMENTS.cropOverlayEl.style.display = 'none'; // Will be shown after updateStage
+        }
+        if (window.ELEMENTS.cropRectangleEl) {
+            window.ELEMENTS.cropRectangleEl.style.display = 'none'; // Will be shown after updateStage
+        }
 
         // Store image dimensions for crop calculations
         const imgRect = currentImageEl.getBoundingClientRect();
@@ -406,8 +449,8 @@ function loadImageAndInitCrop(identifier) {
 
     currentImageEl.onerror = () => {
         console.error('Failed to load image:', identifier);
-        window.ELEMENTS.noImageViewEl.style.display = 'block';
-        window.ELEMENTS.editorViewEl.style.display = 'none';
+        window._loadingNewImage = false; // Reset flag on image load error
+        showView('no-image-view');
         isSelectingImage = false;
     };
 

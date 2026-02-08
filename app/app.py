@@ -16,6 +16,7 @@ from utils.file_handler import (
     get_image_list,
     save_crop_data_json,
     read_crop_data_json,
+    read_all_crop_metadata,
     get_asset_id_from_filename,
     get_filename_from_asset_id,
     get_asset_mapping,
@@ -541,22 +542,155 @@ def get_crop_data(identifier, orientation):
         )
 
 
+@app.route("/crop-data/<path:identifier>/<orientation>", methods=["DELETE"])
+def delete_crop_data(identifier, orientation):
+    """Delete crop data for a specific orientation."""
+    request_id = f"delete-crop-{time.time()}"
+    logging.info(
+        "Delete crop data request received [%s] from %s for %s %s",
+        request_id, request.remote_addr, identifier, orientation
+    )
+
+    try:
+        # Convert filename to asset_id if needed
+        asset_id = identifier
+        if "." in identifier:  # This is a filename
+            asset_id = get_asset_id_from_filename(identifier)
+            if not asset_id:
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "message": f"Cannot find asset ID for filename: {identifier}",
+                            "request_id": request_id,
+                        }
+                    ),
+                    400,
+                )
+
+        # Delete associated output file if it exists
+        output_filename = f"{asset_id}_{orientation}.jpg"
+        output_path = os.path.join(config.OUTPUT_FOLDER, orientation, output_filename)
+
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+                logging.info("Deleted output file: %s [%s]", output_path, request_id)
+            except Exception as e:
+                logging.warning("Failed to delete output file %s: %s [%s]", output_path, str(e), request_id)
+
+        # Delete crop metadata for this specific orientation
+        metadata_path = os.path.join("/config/crops", "metadata.json")
+        if os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, "r") as f:
+                    metadata = json.load(f)
+
+                # Check if asset exists and has the orientation
+                if (asset_id in metadata.get("crops", {}) and
+                    orientation in metadata["crops"][asset_id]):
+
+                    # Delete the specific orientation
+                    del metadata["crops"][asset_id][orientation]
+
+                    # If no orientations left for this asset, delete the asset entry
+                    if not metadata["crops"][asset_id]:
+                        del metadata["crops"][asset_id]
+
+                    # Save updated metadata
+                    with open(metadata_path, "w") as f:
+                        json.dump(metadata, f, indent=2)
+
+                    # Update processed_images status
+                    processed_images = load_progress()
+                    if asset_id in processed_images:
+                        current_status = processed_images[asset_id]
+
+                        if current_status == "both":
+                            # If was both, set to the remaining orientation
+                            remaining_orientation = "landscape" if orientation == "portrait" else "portrait"
+                            processed_images[asset_id] = remaining_orientation
+                        elif current_status == orientation:
+                            # If was only this orientation, mark as unprocessed
+                            del processed_images[asset_id]
+                        # If current_status is the other orientation, leave it alone
+
+                        save_progress(processed_images)
+
+                    logging.info(
+                        "Deleted %s crop data for asset %s [%s]",
+                        orientation, asset_id, request_id
+                    )
+
+                    return jsonify(
+                        {
+                            "success": True,
+                            "message": f"Deleted {orientation} crop data and output file",
+                            "request_id": request_id,
+                            "timestamp": time.time()
+                        }
+                    )
+                else:
+                    return jsonify(
+                        {
+                            "success": True,  # Not an error if data doesn't exist
+                            "message": f"No {orientation} crop data found to delete",
+                            "request_id": request_id,
+                            "timestamp": time.time(),
+                        }
+                    )
+
+            except Exception as e:
+                logging.error(
+                    "Error updating metadata.json: %s [%s]", str(e), request_id
+                )
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": f"Failed to update metadata: {str(e)}",
+                            "request_id": request_id,
+                            "timestamp": time.time(),
+                        }
+                    ),
+                    500,
+                )
+        else:
+            return jsonify(
+                {
+                    "success": True,  # Not an error if file doesn't exist
+                    "message": "No metadata file found",
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                }
+            )
+
+    except Exception as e:
+        logging.error("Error deleting crop data [%s]: %s", request_id, str(e))
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": str(e),
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                }
+            ),
+            500,
+        )
+
+
 @app.route("/upload-all", methods=["POST"])
 def upload_all_processed():
-    """Upload all processed images to Immich output album"""
+    """Upload all processed images to Immich output album by generating them from metadata"""
     request_id = f"upload-all-{time.time()}"
     logging.info(
         "Upload all request received [%s] from %s", request_id, request.remote_addr
     )
 
     try:
-        # Get the latest asset mapping
-        current_mapping = get_asset_mapping()
-
-        # Upload using asset_id associations
-        uploaded_assets = immich_handler.upload_processed_images(
-            config.OUTPUT_FOLDER, current_mapping["file_to_asset"]
-        )
+        # Upload using crop metadata (generates images on-demand)
+        uploaded_assets = immich_handler.upload_from_crop_metadata()
 
         logging.info(
             "Upload all completed [%s], uploaded %d files",
@@ -672,6 +806,212 @@ def reset_image():
         )
     except Exception as e:
         logging.error("Failed to reset image [%s]: %s", request_id, str(e))
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": str(e),
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                }
+            ),
+            500,
+        )
+
+
+@app.route("/crop-data/all", methods=["GET"])
+def get_all_crop_data():
+    """Get all crop metadata."""
+    try:
+        from utils.file_handler import read_all_crop_metadata
+
+        all_metadata = read_all_crop_metadata()
+        return jsonify({"success": True, "crops": all_metadata})
+    except Exception as e:
+        logging.error(f"Error getting all crop data: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/upload-single", methods=["POST"])
+def upload_single_crop():
+    """Upload a single crop image to Immich."""
+    request_id = f"upload-single-{time.time()}"
+    logging.info(
+        "Upload single request received [%s] from %s", request_id, request.remote_addr
+    )
+
+    try:
+        data = request.json
+        identifier = data["identifier"]  # Can be asset_id or filename
+        orientation = data["orientation"]
+
+        # Convert filename to asset_id if needed
+        asset_id = identifier
+        if "." in identifier:  # This is a filename
+            asset_id = get_asset_id_from_filename(identifier)
+            if not asset_id:
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": f"Cannot find asset ID for filename: {identifier}",
+                            "request_id": request_id,
+                        }
+                    ),
+                    400,
+                )
+
+        # Read crop metadata for this image
+        from utils.file_handler import read_crop_data_json
+        crop_data = read_crop_data_json(asset_id, orientation)
+
+        if not crop_data:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": f"No {orientation} crop data found for {identifier}",
+                        "request_id": request_id,
+                    }
+                ),
+                404,
+            )
+
+        # Generate the cropped image
+        from utils.image_processor import crop_image
+        success, error = crop_image(asset_id, orientation, crop_data)
+
+        if not success:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": f"Failed to generate {orientation} crop: {error}",
+                        "request_id": request_id,
+                    }
+                ),
+                500,
+            )
+
+        # Upload the generated image
+        output_filename = f"{asset_id}_{orientation}.jpg"
+        output_path = os.path.join(config.OUTPUT_FOLDER, orientation, output_filename)
+
+        if not os.path.exists(output_path):
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": f"Generated crop file not found: {output_path}",
+                        "request_id": request_id,
+                    }
+                ),
+                500,
+            )
+
+        # Upload to Immich
+        response = immich_handler.upload_asset(
+            output_path, immich_handler.output_album_id, original_asset_id=asset_id
+        )
+
+        if response.get("id"):
+            logging.info(
+                f"Successfully uploaded {orientation} crop for asset {asset_id} [%s]", request_id
+            )
+            return jsonify(
+                {
+                    "success": True,
+                    "asset_id": response["id"],
+                    "orientation": orientation,
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                }
+            )
+        else:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": f"Failed to upload {orientation} crop to Immich",
+                        "request_id": request_id,
+                    }
+                ),
+                500,
+            )
+
+    except Exception as e:
+        logging.error("Error uploading single crop [%s]: %s", request_id, str(e))
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": str(e),
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                }
+            ),
+            500,
+        )
+
+
+@app.route("/delete-original", methods=["DELETE"])
+def delete_original_image():
+    """Delete original image from source album."""
+    request_id = f"delete-original-{time.time()}"
+    logging.info(
+        "Delete original request received [%s] from %s", request_id, request.remote_addr
+    )
+
+    try:
+        data = request.json
+        identifier = data["identifier"]  # Can be asset_id or filename
+
+        # Convert filename to asset_id if needed
+        asset_id = identifier
+        if "." in identifier:  # This is a filename
+            asset_id = get_asset_id_from_filename(identifier)
+            if not asset_id:
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": f"Cannot find asset ID for filename: {identifier}",
+                            "request_id": request_id,
+                        }
+                    ),
+                    400,
+                )
+
+        # Delete the asset from Immich input album
+        result = immich_handler.delete_asset(asset_id)
+
+        if result.get("success", False):
+            logging.info(
+                f"Successfully deleted original image {asset_id} [%s]", request_id
+            )
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Original image deleted successfully",
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                }
+            )
+        else:
+            error_msg = result.get("error", "Unknown error")
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": f"Failed to delete original image: {error_msg}",
+                        "request_id": request_id,
+                    }
+                ),
+                500,
+            )
+
+    except Exception as e:
+        logging.error("Error deleting original image [%s]: %s", request_id, str(e))
         return (
             jsonify(
                 {
@@ -851,5 +1191,16 @@ if __name__ == "__main__":
     logging.info("Starting Meural Canvas Image Cropper")
     logging.info(f"Attempting to connect to Immich at: {config.IMMICH_URL}")
     logging.info(f"Using temporary directory: {config.APP_TMP_DIR}")
+
+    # Respect environment variables for debug mode
+    debug_mode = os.getenv('FLASK_DEBUG', '0').lower() in ('1', 'true', 'yes', 'on')
+
+    # Configure Flask for small-scale production use
+    if not debug_mode:
+        # Suppress the development server warning for self-hosted deployments
+        import logging as flask_logging
+        werkzeug_logger = flask_logging.getLogger('werkzeug')
+        werkzeug_logger.setLevel(flask_logging.ERROR)
+
     # Handle startup errors and continue running the web app
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=debug_mode, threaded=True)
