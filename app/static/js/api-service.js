@@ -7,6 +7,58 @@
 // Sync state tracking
 let syncInProgress = false;
 
+function setJobStatus(state, text) {
+  const statusEl = document.getElementById("job-status");
+  if (!statusEl) return;
+
+  if (!text) {
+    statusEl.style.display = "none";
+    statusEl.textContent = "";
+    statusEl.className = "job-status";
+    return;
+  }
+
+  statusEl.style.display = "inline-flex";
+  statusEl.textContent = text;
+  statusEl.className = `job-status job-status--${state}`;
+}
+
+function startJobPolling(jobId, label) {
+  if (!jobId) return;
+
+  if (window.APP_STATE.jobPoller) {
+    clearInterval(window.APP_STATE.jobPoller);
+  }
+
+  setJobStatus("running", `${label}…`);
+
+  window.APP_STATE.jobPoller = setInterval(async () => {
+    try {
+      const response = await fetch(`/jobs/${jobId}`);
+      const data = await response.json();
+      if (!data.success || !data.job) {
+        return;
+      }
+
+      const job = data.job;
+      if (job.status === "completed") {
+        clearInterval(window.APP_STATE.jobPoller);
+        window.APP_STATE.jobPoller = null;
+        setJobStatus("success", `${label} completed`);
+        setTimeout(() => setJobStatus("", ""), 4000);
+      } else if (job.status === "failed") {
+        clearInterval(window.APP_STATE.jobPoller);
+        window.APP_STATE.jobPoller = null;
+        setJobStatus("error", `${label} failed`);
+      } else {
+        setJobStatus("running", `${label}…`);
+      }
+    } catch (error) {
+      console.error("Error polling job status:", error);
+    }
+  }, 2000);
+}
+
 /**
  * Sync images from Immich input album
  */
@@ -125,6 +177,10 @@ function uploadAllToImmich() {
     .then((response) => response.json())
     .then((data) => {
       if (data.success) {
+        if (data.queued && data.job_id) {
+          startJobPolling(data.job_id, "Upload all to Meural");
+          return [];
+        }
         alert(`Successfully uploaded ${data.uploaded_assets?.length || 0} images to Immich`);
         return data.uploaded_assets;
       } else {
@@ -165,6 +221,9 @@ function completeImage() {
     .then((response) => response.json())
     .then((data) => {
       if (data.success) {
+        if (data.queued && data.job_id) {
+          startJobPolling(data.job_id, "Upload to Meural");
+        }
         // Update state directly
         currentImage.status = "completed";
 

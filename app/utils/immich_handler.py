@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 from typing import List, Dict, Any, Optional
 import logging
@@ -28,8 +29,6 @@ class ImmichHandler:
             raise ValueError("IMMICH_API_KEY not configured in config.yaml")
         if not self.input_album_id:
             raise ValueError("IMMICH_INPUT_ALBUM_ID not configured in config.yaml")
-        if not self.output_album_id:
-            raise ValueError("IMMICH_OUTPUT_ALBUM_ID not configured in config.yaml")
 
         self.headers = {"x-api-key": self.api_key, "Accept": "application/json"}
 
@@ -104,6 +103,17 @@ class ImmichHandler:
         ):
             return album_data["assets"]
         return []
+
+    def get_asset_albums(self, asset_id: str) -> List[Dict[str, Any]]:
+        """Get all albums that contain a specific asset."""
+        if not asset_id:
+            return []
+        try:
+            data = self._make_request("GET", "/albums", params={"assetId": asset_id})
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            logging.error(f"Failed to fetch albums for asset {asset_id}: {e}")
+            return []
 
     # Helper: extract original asset ID from processed filename "<assetId>_<orientation>.<ext>"
     def _parse_original_asset_id_from_processed_name(self, filename: str) -> Optional[str]:
@@ -245,7 +255,10 @@ class ImmichHandler:
                 "created_at": asset_info.get("fileCreatedAt", ""),
                 "modified_at": asset_info.get("fileModifiedAt", ""),
                 "local_date_time": asset_info.get("localDateTime", ""),
-                "exif": asset_info.get("exifInfo", {})
+                "exif": asset_info.get("exifInfo", {}),
+                "people": asset_info.get("people", []),
+                "albums": asset_info.get("albums", []),
+                "album_ids": asset_info.get("albumIds", [])
             }
 
             # Save to metadata file
@@ -509,6 +522,47 @@ class ImmichHandler:
 
         return downloaded_assets
 
+    def refresh_asset_metadata(self, asset_id: str, input_folder: str) -> Dict[str, Any]:
+        """Refresh local metadata for an asset without re-downloading the file."""
+        try:
+            asset_info = self._make_request("GET", f"/assets/{asset_id}")
+            if not isinstance(asset_info, dict):
+                return {"success": False, "error": "Invalid asset response"}
+
+            metadata_dir = os.path.join(input_folder, ".metadata")
+            os.makedirs(metadata_dir, exist_ok=True)
+            metadata_file = os.path.join(metadata_dir, f"{asset_id}.json")
+
+            if not os.path.exists(metadata_file):
+                ok, _ = self.download_asset(asset_id, input_folder)
+                if not ok:
+                    return {"success": False, "error": "Failed to download asset for metadata"}
+                return {"success": True, "asset_id": asset_id, "downloaded": True}
+
+            with open(metadata_file, "r") as f:
+                metadata = json.load(f)
+
+            metadata.update(
+                {
+                    "original_filename": asset_info.get("originalFileName", metadata.get("original_filename", "")),
+                    "created_at": asset_info.get("fileCreatedAt", metadata.get("created_at", "")),
+                    "modified_at": asset_info.get("fileModifiedAt", metadata.get("modified_at", "")),
+                    "local_date_time": asset_info.get("localDateTime", metadata.get("local_date_time", "")),
+                    "exif": asset_info.get("exifInfo", metadata.get("exif", {})),
+                    "people": asset_info.get("people", metadata.get("people", [])),
+                    "albums": asset_info.get("albums", metadata.get("albums", [])),
+                    "album_ids": asset_info.get("albumIds", metadata.get("album_ids", [])),
+                }
+            )
+
+            with open(metadata_file, "w") as f:
+                json.dump(metadata, f, indent=2)
+
+            return {"success": True, "asset_id": asset_id, "downloaded": False}
+        except Exception as e:
+            logging.error(f"Failed to refresh metadata for {asset_id}: {e}")
+            return {"success": False, "error": str(e)}
+
     def upload_processed_images(
         self, output_folder: str, asset_mapping: Dict[str, Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -669,6 +723,31 @@ class ImmichHandler:
 
         except Exception as e:
             logging.error(f"Error deleting asset {asset_id}: {str(e)}")
+            return {"success": False, "error": str(e)}
+
+    def remove_asset_from_album(self, album_id: str, asset_id: str) -> Dict[str, Any]:
+        """Remove an asset from a specific album without deleting it.
+
+        Args:
+            album_id (str): Album ID to remove the asset from
+            asset_id (str): Asset ID to remove
+
+        Returns:
+            Dict[str, Any]: Result with success status and message
+        """
+        try:
+            logging.info(f"Removing asset {asset_id} from album {album_id}")
+            response = self._make_request(
+                "DELETE",
+                f"/albums/{album_id}/assets",
+                json={"ids": [asset_id]}
+            )
+
+            if response is not None:
+                return {"success": True, "message": "Asset removed from album"}
+            return {"success": False, "error": "Failed to remove asset from album"}
+        except Exception as e:
+            logging.error(f"Error removing asset {asset_id} from album {album_id}: {e}")
             return {"success": False, "error": str(e)}
 
     def _get_asset_id_from_filename(

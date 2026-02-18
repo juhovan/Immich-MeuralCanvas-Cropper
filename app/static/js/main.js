@@ -13,32 +13,35 @@ async function initializeApp() {
 
     // 1. Cache DOM elements
     const elements = {
-        imageGrid: 'image-grid',
-        imageCount: 'image-count',
-        currentImage: 'current-image',
-        cropRectangle: 'crop-rectangle',
-        cropOverlay: 'crop-overlay',
-        editorView: 'editor-view',
-        noImageView: 'no-image-view',
-        previewView: 'preview-view',
-        portraitPreview: 'portrait-preview-img',
-        landscapePreview: 'landscape-preview-img',
-        stageName: 'stage-name',
-        editorContainer: 'editor-container',
-        stage1Label: 'stage-1-label',
-        stage2Label: 'stage-2-label',
-        stage3Label: 'stage-3-label',
-        btnBack: 'btn-back',
-        btnSkip: 'btn-skip',
-        btnReset: 'btn-reset',
-        btnCrop: 'btn-crop',
-        btnSave: 'btn-save',
-        btnImmichSync: 'btn-immich-sync',
-        btnImmichUpload: 'btn-immich-upload',
-        btnMeuralPreview: 'btn-meural-preview',
-        stage1: 'stage-1',
-        stage2: 'stage-2',
-        stage3: 'stage-3'
+      imageGrid: "image-grid",
+      imageCount: "image-count",
+      currentImage: "current-image",
+      cropRectangle: "crop-rectangle",
+      cropOverlay: "crop-overlay",
+      editorView: "editor-view",
+      noImageView: "no-image-view",
+      previewView: "preview-view",
+      portraitPreview: "portrait-preview-img",
+      landscapePreview: "landscape-preview-img",
+      stageName: "stage-name",
+      editorContainer: "editor-container",
+      stage1Label: "stage-1-label",
+      stage2Label: "stage-2-label",
+      stage3Label: "stage-3-label",
+      btnBack: "btn-back",
+      btnSkip: "btn-skip",
+      btnReset: "btn-reset",
+      btnDeleteOriginal: "btn-delete-original",
+      btnViewImmich: "btn-view-immich",
+      btnRefreshImmich: "btn-refresh-immich",
+      btnCrop: "btn-crop",
+      btnSave: "btn-save",
+      btnImmichSync: "btn-immich-sync",
+      btnImmichUpload: "btn-immich-upload",
+      btnMeuralPreview: "btn-meural-preview",
+      stage1: "stage-1",
+      stage2: "stage-2",
+      stage3: "stage-3",
     };
 
     // Cache all elements consistently using window.ELEMENTS
@@ -153,6 +156,88 @@ async function initializeApp() {
         if (!window.APP_STATE.syncing) {
             resetImage();
         }
+    });
+
+    setupButtonHandler(window.ELEMENTS.btnDeleteOriginalEl, () => {
+      if (window.APP_STATE.syncing) {
+        return;
+      }
+
+      const currentImage = window.APP_STATE.currentImage;
+      if (!currentImage) {
+        return;
+      }
+
+      const identifier = currentImage.asset_id || currentImage.filename;
+      const displayName = currentImage.original_filename || currentImage.filename || identifier;
+
+      deleteOriginalImage(identifier, displayName);
+    });
+
+    setupButtonHandler(window.ELEMENTS.btnViewImmichEl, () => {
+      if (window.APP_STATE.syncing) {
+        return;
+      }
+
+      const currentImage = window.APP_STATE.currentImage;
+      if (!currentImage) {
+        return;
+      }
+
+      const assetId = currentImage.asset_id;
+      if (!assetId) {
+        alert("Asset ID not available for this image.");
+        return;
+      }
+
+      if (!window.IMMICH_URL) {
+        alert("Immich URL not configured.");
+        return;
+      }
+
+      const immichUrl = window.IMMICH_URL.replace(/\/$/, "");
+      const url = `${immichUrl}/photos/${encodeURIComponent(assetId)}`;
+      window.open(url, "_blank");
+    });
+
+    setupButtonHandler(window.ELEMENTS.btnRefreshImmichEl, async () => {
+      if (window.APP_STATE.syncing) {
+        return;
+      }
+
+      const currentImage = window.APP_STATE.currentImage;
+      if (!currentImage) {
+        return;
+      }
+
+      const identifier = currentImage.asset_id || currentImage.filename;
+      if (!identifier) {
+        return;
+      }
+
+      try {
+        window.ELEMENTS.btnRefreshImmichEl.disabled = true;
+        const response = await fetch("/refresh-asset", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ identifier }),
+        });
+        const data = await response.json();
+        if (!data.success) {
+          alert(`Failed to refresh from Immich: ${data.error || "Unknown error"}`);
+        }
+      } catch (error) {
+        console.error("Error refreshing from Immich:", error);
+        alert(`Failed to refresh from Immich: ${error}`);
+      } finally {
+        window.ELEMENTS.btnRefreshImmichEl.disabled = false;
+      }
+
+      if (typeof updateDetectedFaces === "function") {
+        updateDetectedFaces(identifier);
+      }
     });
 
     setupButtonHandler(window.ELEMENTS.btnSaveEl, () => {

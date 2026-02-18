@@ -68,8 +68,12 @@
           });
         })();
     </script>
+    <script>
+        window.IMMICH_URL = "{{ immich_url|e }}";
+    </script>
     <header class="app-header">
         <h1 class="app-title"><strong>Meural</strong> Canvas Image Cropper</h1>
+        <div id="job-status" class="job-status" style="display: none;"></div>
     </header>
 
     <div class="container-fluid app-container">
@@ -142,6 +146,10 @@
                         </div>
 
                         <h2 id="stage-name" class="stage-title"><strong>Portrait</strong> Crop (1080×1920)</h2>
+                        <div id="detected-info" class="detected-info" style="display: none;">
+                            <div id="detected-faces" class="detected-faces"></div>
+                            <div id="detected-geo" class="detected-geo"></div>
+                        </div>
 
                         <!-- Updated image container with position: relative for proper crop rectangle positioning -->
                         <div class="editor-container" id="editor-container">
@@ -180,14 +188,23 @@
                             <button id="btn-back" class="btn btn-meural btn-secondary" disabled>
                                 <i class="fas fa-arrow-left"></i> Back
                             </button>
-                            <button id="btn-skip" class="btn btn-meural btn-warning">
-                                <i class="fas fa-forward"></i> Skip Portrait
-                            </button>
                             <button id="btn-reset" class="btn btn-meural btn-danger">
                                 <i class="fas fa-redo"></i> Reset
                             </button>
+                            <button id="btn-delete-original" class="btn btn-meural btn-danger" title="Remove from input album">
+                                <i class="fas fa-trash"></i> Remove from Album
+                            </button>
+                            <button id="btn-view-immich" class="btn btn-meural btn-secondary" title="View on Immich">
+                                <i class="fas fa-images"></i> View on Immich
+                            </button>
+                            <button id="btn-refresh-immich" class="btn btn-meural btn-secondary" title="Refresh metadata from Immich">
+                                <i class="fas fa-sync"></i> Refresh from Immich
+                            </button>
                             <button id="btn-meural-preview" class="btn btn-meural btn-secondary">
                                 <i class="fas fa-tv"></i> Preview on Meural
+                            </button>
+                            <button id="btn-skip" class="btn btn-meural btn-warning">
+                                <i class="fas fa-forward"></i> Skip Portrait
                             </button>
                             <button id="btn-crop" class="btn btn-meural">
                                 Crop and Continue <i class="fas fa-arrow-right"></i>

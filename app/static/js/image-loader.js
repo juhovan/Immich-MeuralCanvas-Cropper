@@ -260,6 +260,58 @@ function addImageClickHandlers() {
  */
 let isSelectingImage = false;
 
+async function updateDetectedFaces(identifier) {
+  const containerEl = document.getElementById("detected-info");
+  const facesEl = document.getElementById("detected-faces");
+  const geoEl = document.getElementById("detected-geo");
+  if (!containerEl || !facesEl || !geoEl) return;
+
+  if (!identifier) {
+    containerEl.style.display = "none";
+    facesEl.textContent = "";
+    geoEl.textContent = "";
+    return;
+  }
+
+  try {
+    const response = await fetch(`/people/${encodeURIComponent(identifier)}`);
+    const data = await response.json();
+
+    if (data.success) {
+      const titleText = (data.description || data.original_filename || "").trim();
+      const names = Array.isArray(data.names) ? data.names : [];
+      const unnamedCount = Number.isFinite(data.unnamed_faces) ? data.unnamed_faces : 0;
+      const locationText = (data.location || "").trim();
+      const hasLocation = Boolean(data.has_location || locationText);
+
+      if (titleText || names.length > 0 || unnamedCount > 0 || locationText || !hasLocation) {
+        const titleLine = titleText ? `<div><strong>${titleText}</strong></div>` : "";
+        const facesLine = names.length > 0 ? `<div><strong>Faces:</strong> ${names.join(", ")}</div>` : "";
+        const warningLine =
+          unnamedCount > 0 ? `<div class="text-warning">Warning: ${unnamedCount} face(s) missing name</div>` : "";
+
+        const geoLine = locationText ? `<div><strong>Location:</strong> ${locationText}</div>` : "";
+        const geoWarning = !hasLocation ? `<div class="text-warning">Warning: location not set</div>` : "";
+
+        facesEl.innerHTML = `${titleLine}${facesLine}${warningLine}`;
+        geoEl.innerHTML = `${geoLine}${geoWarning}`;
+        containerEl.style.display = "flex";
+        return;
+      }
+    }
+    containerEl.style.display = "none";
+    facesEl.textContent = "";
+    geoEl.textContent = "";
+  } catch (error) {
+    console.error("Error loading detected faces:", error);
+    containerEl.style.display = "none";
+    facesEl.textContent = "";
+    geoEl.textContent = "";
+  }
+}
+
+window.updateDetectedFaces = updateDetectedFaces;
+
 function selectImage(identifier) {
     if (window.APP_STATE.syncing || isSelectingImage) {
         console.log("Skipping image selection - operation in progress");
@@ -317,16 +369,20 @@ function selectImage(identifier) {
             filename: window.APP_STATE.currentImage.filename
         });
 
+        const imageIdentifier = window.APP_STATE.currentImage.asset_id || identifier;
+
+        updateDetectedFaces(imageIdentifier);
+
         // Load saved crop data and continue with image loading
-        loadSavedCropData(window.APP_STATE.currentImage.asset_id || identifier)
-            .then(() => {
-                loadImageAndInitCrop(window.APP_STATE.currentImage.asset_id || identifier);
-            })
-            .catch(error => {
-                console.error("Error loading crop data:", error);
-                // Continue anyway
-                loadImageAndInitCrop(window.APP_STATE.currentImage.asset_id || identifier);
-            });
+        loadSavedCropData(imageIdentifier)
+          .then(() => {
+            loadImageAndInitCrop(imageIdentifier);
+          })
+          .catch((error) => {
+            console.error("Error loading crop data:", error);
+            // Continue anyway
+            loadImageAndInitCrop(imageIdentifier);
+          });
     } catch (error) {
         console.error('Error selecting image:', error);
         window._loadingNewImage = false; // Reset flag on error

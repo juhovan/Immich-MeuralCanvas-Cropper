@@ -150,6 +150,39 @@ body {
     padding: 10px 15px;
     border-bottom: 4px solid var(--secondary-color);
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.job-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9rem;
+    background: rgba(255, 255, 255, 0.15);
+    padding: 6px 10px;
+    border-radius: 16px;
+}
+
+.job-status--running::before {
+    content: "\f110";
+    font-family: "Font Awesome 6 Free";
+    font-weight: 900;
+    display: inline-block;
+    animation: fa-spin 1s infinite linear;
+}
+
+.job-status--success::before {
+    content: "\f00c";
+    font-family: "Font Awesome 6 Free";
+    font-weight: 900;
+}
+
+.job-status--error::before {
+    content: "\f071";
+    font-family: "Font Awesome 6 Free";
+    font-weight: 900;
 }
 
 .app-title {
@@ -512,6 +545,30 @@ body {
 
 .stage-title strong {
     font-weight: 600;
+}
+
+/* Detected faces / geolocation display */
+.detected-info {
+    margin: 6px 0 10px 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    font-size: 0.95rem;
+    color: #6c757d;
+}
+
+.detected-faces,
+.detected-geo {
+    flex: 1;
+}
+
+.detected-geo {
+    text-align: right;
+}
+
+.detected-info strong {
+    color: var(--dark-color);
 }
 
 /* Buttons */

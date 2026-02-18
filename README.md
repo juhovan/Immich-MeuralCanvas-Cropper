@@ -27,7 +27,7 @@ A comprehensive web application designed to seamlessly crop images from Immich f
 
 ### Immich Integration
 
-- **Direct Album Access**: Connect to specific Immich albums for input and output
+- **Direct Album Access**: Connect to a specific Immich input album for source images
 - **Metadata Preservation**: Maintains EXIF data and image quality
 - **Batch Processing**: Process multiple images efficiently
 - **Asset ID Mapping**: Seamless integration with Immich's asset management
@@ -255,7 +255,6 @@ immich:
   url: "http://your-immich-server:2283"
   api_key: "your-immich-api-key"
   input_album_id: "album-id-for-source-images"
-  output_album_id: "album-id-for-cropped-images"
 
 # Meural Canvas devices (optional)
 meural:
@@ -305,9 +304,9 @@ meural:
    - Click "Crop and Continue" to save the landscape crop
 
 5. **Review and Upload**
-   - Preview both crops in the final review stage
-   - Use "Preview on Meural" to test on your canvas devices
-   - Click "Upload Crops" to save to Immich output album
+  - Preview both crops in the final review stage
+  - Use "Preview on Meural" to test on your canvas devices
+  - Click "Upload Crops" to upload cropped images to your Meural playlist
 
 ### Advanced Features
 

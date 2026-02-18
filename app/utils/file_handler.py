@@ -28,6 +28,7 @@ def get_image_list(processed_images):
         list: List of dictionaries with asset_id, filename, and status
     """
     images = []
+    crop_metadata = read_all_crop_metadata()
     # Check if directory exists first
     if os.path.exists(INPUT_FOLDER):
         # Check if metadata folder exists
@@ -62,8 +63,18 @@ def get_image_list(processed_images):
                 if not os.path.exists(file_path):
                     continue
 
-                # Get status from processed_images using asset_id as key
-                status = processed_images.get(asset_id, "unprocessed")
+                # Determine status from crop metadata
+                status = "unprocessed"
+                crops = crop_metadata.get(asset_id, {}) if isinstance(crop_metadata, dict) else {}
+                has_portrait = bool(crops.get("portrait"))
+                has_landscape = bool(crops.get("landscape"))
+
+                if has_portrait and has_landscape:
+                    status = "both"
+                elif has_portrait:
+                    status = "portrait"
+                elif has_landscape:
+                    status = "landscape"
 
                 images.append(
                     {

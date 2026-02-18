@@ -4,15 +4,14 @@ import requests
 import urllib.request
 
 import config
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 # New imports for comparison helpers
 from typing import Set, Dict, Any, Optional, List
-import re
-from utils.file_handler import get_asset_metadata
+from utils.file_handler import get_asset_metadata, read_all_crop_metadata
+from utils.image_processor import crop_image
 import boto3
 # New imports for sync helpers
 import os
-import json
 from utils.immich_handler import ImmichHandler
 
 class MeuralUpload:
@@ -23,7 +22,6 @@ class MeuralUpload:
         self.token_time = None
         self.base_url = "https://api.meural.com/v0"
         self.authenticate()
-        self.compare_playlist_with_immich()
         # Lazy Immich handler (created only when needed)
         self._immich = None
 
@@ -119,13 +117,14 @@ class MeuralUpload:
 
         return r.get("data", {}).get("id")
 
-    def _set_image_metadata(self, image_id, name, description, medium, year):
+    def _set_image_metadata(self, image_id, name, author, description, medium, year):
         if (time.time() - self.token_time) > 300:
             self.authenticate()
 
         headers = {"Authorization": "Token " + self.token}
         data = {
             "name": name,
+            "author": author or "",
             "description": description,
             "medium": medium,
             "year": year
@@ -151,32 +150,47 @@ class MeuralUpload:
             self.authenticate()
 
         headers = {"Authorization": "Token " + self.token}
-        r, _ = self._json_request_with_retry(
+        _, resp = self._json_request_with_retry(
             "POST",
             f"{self.base_url}/galleries/{playlist_id}/items/{image_id}",
             headers=headers,
+            expect_json=False,
+            timeout=20,
         )
-        if r is None:
-            logging.error(f"Error adding image {image_id} to playlist {playlist_id}: invalid/empty JSON response")
+
+        if resp is None:
+            logging.error(f"Error adding image {image_id} to playlist {playlist_id}: no response")
             return False
 
-        logging.info(f"Meural add to playlist response: {r}")
-        if "error" in r:
-            logging.error(f"Error adding image {image_id} to playlist {playlist_id}: {r['error']}")
-            return False
-        return True
+        if resp.status_code in (200, 201, 204, 409):
+            logging.info(
+                f"Meural add to playlist response: status={resp.status_code} image_id={image_id}"
+            )
+            return True
+
+        logging.error(
+            f"Error adding image {image_id} to playlist {playlist_id}: {resp.status_code} {resp.text[:200]}"
+        )
+        return False
 
     def _format_exif_description(self, exif: Dict[str, Any]) -> str:
         """Format EXIF data into a description string."""
         make = exif.get("make") or ""
         model = exif.get("model") or ""
+        if make and model:
+            if model.lower().startswith(make.lower()):
+                model = model[len(make):].strip()
+            elif make.lower() in model.lower():
+                model = " ".join(
+                    [part for part in model.split() if part.lower() != make.lower()]
+                ).strip()
         lens_model = exif.get("lensModel") or ""
         exposure_time = "" if exif.get("exposureTime") is None else f"{exif.get('exposureTime')}s "
         f_number = "" if exif.get("fNumber") is None else f"f/{exif.get('fNumber')} "
         iso = "" if exif.get("iso") is None else f"ISO{exif.get('iso')} "
         focal_length = "" if exif.get("focalLength") is None else f"{exif.get('focalLength')}mm"
 
-        return f"{make} {model} {lens_model} {exposure_time}{f_number}{iso}{focal_length}".strip()
+        return f"{make} {model}, {lens_model}, {exposure_time}{f_number}{iso}{focal_length}".strip()
 
     def _metadata_changed(self, current_metadata: Dict[str, Any], current_description: str) -> bool:
         """Compare relevant metadata fields directly with what's in Meural description."""
@@ -188,6 +202,121 @@ class MeuralUpload:
             logging.error(f"Error comparing metadata: {e}")
             return False
 
+    def _build_author_from_people(self, people: List[Dict[str, Any]]) -> str:
+        if not people:
+            return ""
+
+        ordered = []
+        for person in people:
+            name = (person or {}).get("name") or ""
+            if not name:
+                continue
+            faces = (person or {}).get("faces") or []
+            x_vals = [f.get("boundingBoxX1") for f in faces if f.get("boundingBoxX1") is not None]
+            x_pos = min(x_vals) if x_vals else float("inf")
+            ordered.append((x_pos, name))
+
+        ordered.sort(key=lambda item: item[0])
+        return ", ".join([name for _, name in ordered])
+
+    def _extract_album_names(self, albums: Any) -> List[str]:
+        names: List[str] = []
+        if not albums:
+            return names
+        for album in albums:
+            if isinstance(album, str):
+                if album:
+                    names.append(album)
+                continue
+            if isinstance(album, dict):
+                name = album.get("albumName") or album.get("name") or album.get("title")
+                if name:
+                    names.append(name)
+        return names
+
+    def _get_album_names_for_asset(self, metadata: Dict[str, Any]) -> List[str]:
+        names = self._extract_album_names(metadata.get("albums") or metadata.get("albumInfo"))
+        if names:
+            return names
+
+        album_ids = metadata.get("album_ids") or metadata.get("albumIds") or []
+        if album_ids:
+            try:
+                immich = self._get_immich()
+                resolved = []
+                for album_id in album_ids:
+                    try:
+                        album_info = immich._make_request("GET", f"/albums/{album_id}")
+                        name = album_info.get("albumName") or album_info.get("name") or album_info.get("title")
+                        if name:
+                            resolved.append(name)
+                    except Exception:
+                        continue
+                if resolved:
+                    return resolved
+            except Exception as e:
+                logging.error(f"Failed to resolve album IDs from metadata: {e}")
+
+        asset_id = metadata.get("asset_id")
+        if not asset_id:
+            return []
+
+        try:
+            immich = self._get_immich()
+            albums = immich.get_asset_albums(asset_id)
+            return self._extract_album_names(albums)
+        except Exception as e:
+            logging.error(f"Failed to fetch albums for asset {asset_id}: {e}")
+            return []
+
+    def _parse_timezone_offset(self, tz_value: str):
+        if not tz_value:
+            return None
+
+        tz_value = tz_value.strip()
+        if tz_value in ("Z", "UTC"):
+            return datetime.timezone.utc
+
+        # Accept formats like +02:00, -0500, UTC+02:00
+        if tz_value.upper().startswith("UTC"):
+            tz_value = tz_value[3:]
+
+        sign = 1
+        if tz_value.startswith("-"):
+            sign = -1
+        tz_value = tz_value.lstrip("+-")
+
+        parts = tz_value.split(":")
+        try:
+            if len(parts) == 1:
+                hours = int(parts[0][:2])
+                minutes = int(parts[0][2:]) if len(parts[0]) > 2 else 0
+            else:
+                hours = int(parts[0])
+                minutes = int(parts[1])
+        except Exception:
+            return None
+
+        offset = datetime.timedelta(hours=hours * sign, minutes=minutes * sign)
+        return datetime.timezone(offset)
+
+    def _get_people_for_asset(self, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+        people = metadata.get("people") or []
+        if people:
+            return people
+
+        asset_id = metadata.get("asset_id")
+        if not asset_id:
+            return []
+
+        try:
+            immich = self._get_immich()
+            asset_info = immich._make_request("GET", f"/assets/{asset_id}")
+            return asset_info.get("people", []) if isinstance(asset_info, dict) else []
+        except Exception as e:
+            logging.error(f"Failed to fetch people for asset {asset_id}: {e}")
+            return []
+
     def upload_image(self, image_path, metadata):
         image_id = self._upload_image_data(image_path)
         if not image_id:
@@ -195,14 +324,23 @@ class MeuralUpload:
 
         exif = metadata["exif"]
         name = (exif.get("description") or metadata["original_filename"])
-        medium = ((exif.get("city") or "") + " " +
-                  (exif.get("state") or "") + " " +
-                  (exif.get("country") or "")).strip()
+        medium_parts = [
+            exif.get("city"),
+            exif.get("state"),
+            exif.get("country"),
+        ]
+        medium = ", ".join([part for part in medium_parts if part]).strip()
+        author = self._build_author_from_people(self._get_people_for_asset(metadata))
         raw_date = metadata["local_date_time"]
         try:
             raw_date = raw_date.replace("Z", "+00:00")
             dt = datetime.fromisoformat(raw_date)
-            year = dt.strftime("%d.%m.%Y")
+            if dt.tzinfo is None:
+                tz_value = (metadata.get("exif", {}) or {}).get("timeZone")
+                tzinfo = self._parse_timezone_offset(tz_value)
+                if tzinfo is not None:
+                    dt = dt.replace(tzinfo=tzinfo)
+            year = dt.strftime("%d.%m.%Y %H:%M")
         except Exception:
             year = raw_date[:16] if len(raw_date) > 16 else raw_date
 
@@ -213,9 +351,21 @@ class MeuralUpload:
             # Fallback to original_filename only if we must
             asset_id = metadata["original_filename"]
 
-        description = f"{self._format_exif_description(exif)}\n{asset_id}".strip()
+        album_names = self._get_album_names_for_asset(metadata)
+        album_list = ", ".join([name for name in album_names if name])
+        metadata_desc = self._format_exif_description(exif)
+        description_parts = []
+        if album_list:
+            description_parts.append(f"Albums: {album_list}")
+        if metadata_desc:
+            description_parts.append(metadata_desc)
+        description_line = " | ".join([part for part in description_parts if part]).strip()
+        if description_line:
+            description = f"{description_line}\n{asset_id}".strip()
+        else:
+            description = asset_id
 
-        set_image_metdata = self._set_image_metadata(image_id, name, description, medium, year)
+        set_image_metdata = self._set_image_metadata(image_id, name, author, description, medium, year)
         add_to_playlist = self._add_to_playlist(image_id, config.MEURAL_PLAYLIST_ID)
         if not set_image_metdata or not add_to_playlist:
             logging.error(f"Failed to set metadata or add image {image_id} to playlist.")
@@ -224,7 +374,7 @@ class MeuralUpload:
         return True
 
     # Helper: list all items in a Meural playlist (returns list of dicts)
-    def _list_playlist_items(self, playlist_id: str, per_page: int = 100) -> List[Dict[str, Any]]:
+    def _list_playlist_items(self, playlist_id: str, per_page: int = 10) -> List[Dict[str, Any]]:
         try:
             if not self.token_time or (time.time() - self.token_time) > 300:
                 self.authenticate()
@@ -248,15 +398,16 @@ class MeuralUpload:
                 if not items:
                     break
                 items_all.extend(items)
-                meta = data.get("meta", {})
-                if total_pages is None:
-                    total_pages = meta.get("total_pages") or data.get("total_pages") or None
-                if total_pages:
-                    if page >= int(total_pages):
-                        break
-                else:
+                is_paginated = data.get("isPaginated")
+                is_last = data.get("isLast")
+                total_count = data.get("count")
+                if is_last is True:
+                    break
+                if is_paginated is False:
                     if len(items) < per_page:
                         break
+                if total_count is not None and len(items_all) >= int(total_count):
+                    break
                 page += 1
             return items_all
         except Exception as e:
@@ -286,36 +437,50 @@ class MeuralUpload:
             self._immich = ImmichHandler()
         return self._immich
 
-    # New method: compare Meural playlist contents with Immich output album
-    def compare_playlist_with_immich(
+    def _normalize_crop_metadata(self) -> Dict[str, Dict[str, Any]]:
+        raw = read_all_crop_metadata()
+        if isinstance(raw, dict) and "crops" in raw and isinstance(raw.get("crops"), dict):
+            return raw.get("crops", {})
+        return raw if isinstance(raw, dict) else {}
+
+    def _get_input_album_asset_ids(self) -> Set[str]:
+        try:
+            immich = self._get_immich()
+            assets = immich.get_album_assets(config.IMMICH_INPUT_ALBUM_ID)
+            return {a.get("id") for a in assets if a.get("id")}
+        except Exception as e:
+            logging.error(f"Failed to read Immich input album assets: {e}")
+            return set()
+
+    def _get_meural_asset_map(
+        self, playlist_id: str, per_page: int = 100
+    ) -> Dict[str, Dict[str, Any]]:
+        items = self._list_playlist_items(playlist_id, per_page=per_page)
+        meural_map: Dict[str, Dict[str, Any]] = {}
+        for it in items:
+            desc = (it or {}).get("description") or ""
+            lines = [ln.strip() for ln in desc.splitlines() if ln.strip()]
+            if not lines:
+                continue
+            asset_id = lines[-1]
+            entry = meural_map.setdefault(asset_id, {"item_ids": [], "description": ""})
+            entry["item_ids"].append(it.get("id"))
+            entry["description"] = "\n".join(lines[:-1])
+        return meural_map
+
+    def compare_playlist_with_input_album(
         self,
         playlist_id: Optional[str] = None,
-        immich_album_id: Optional[str] = None,
         per_page: int = 100
     ) -> Dict[str, Any]:
         """
-        Fetch current Meural playlist items and compare to Immich output album.
-
-        Uses the last non-empty line of Meural item's description (which we set to original_filename)
-        and compares against original filenames resolved from Immich processed assets via local metadata.
-
-        Returns a dict with:
-          - in_meural: sorted list of original filenames found on Meural
-          - in_immich: sorted list of original filenames found in Immich album (via metadata)
-          - missing_on_meural: in Immich but not on Meural
-          - only_on_meural: on Meural but not in Immich
-          - counts: summary counts
+        Compare Meural playlist items with Immich input album, using crop metadata
+        as the eligibility signal for upload.
         """
         playlist_id = playlist_id or getattr(config, "MEURAL_PLAYLIST_ID", None)
-        immich_album_id = immich_album_id or getattr(config, "IMMICH_OUTPUT_ALBUM_ID", None)
-
         if not playlist_id:
             logging.error("Meural playlist ID not provided")
             return {"error": "Meural playlist ID not provided"}
-
-        if not immich_album_id:
-            logging.error("Immich output album ID not provided")
-            return {"error": "Immich output album ID not provided"}
 
         # Ensure token is fresh
         try:
@@ -325,98 +490,33 @@ class MeuralUpload:
             logging.error(f"Failed to authenticate with Meural API: {e}")
             return {"error": f"Meural auth failed: {e}"}
 
-        # 1) Collect asset IDs (not original filenames) present on Meural (from description last line)
-        meural_asset_ids: Set[str] = set()
-        try:
-            headers = {"Authorization": f"Token {self.token}"}
-            page = 1
-            total_pages = None
-            while True:
-                url = f"{self.base_url}/galleries/{playlist_id}/items"
-                params = {"page": page, "per_page": per_page}
-                data, resp = self._json_request_with_retry("GET", url, headers=headers, params=params, timeout=15)
-                if data is None:
-                    logging.error(f"Failed to fetch Meural playlist items (page {page}) due to invalid/empty JSON")
-                    break
-                if resp is not None and not resp.ok:
-                    logging.error(f"Failed to fetch Meural playlist items: {resp.status_code} {resp.text[:200]}")
-                    break
+        meural_map = self._get_meural_asset_map(playlist_id, per_page=per_page)
+        meural_asset_ids = set(meural_map.keys())
 
-                items = data.get("data")
-                if items is None:
-                    # Some responses might return the list directly
-                    if isinstance(data, list):
-                        items = data
-                    else:
-                        items = data.get("items", [])
+        input_asset_ids = self._get_input_album_asset_ids()
 
-                if not items:
-                    break
+        crop_metadata = self._normalize_crop_metadata()
+        assets_with_crops = {
+            asset_id for asset_id, data in crop_metadata.items() if data
+        }
 
-                for item in items:
-                    desc = (item or {}).get("description") or ""
-                    lines = [ln.strip() for ln in desc.splitlines() if ln.strip()]
-                    if len(lines) >= 2:  # We expect at least signature and asset_id
-                        asset_id = lines[-1]
-                        meural_asset_ids.add(asset_id)
+        eligible_for_upload = input_asset_ids & assets_with_crops
 
-                # Pagination handling
-                meta = data.get("meta", {})
-                if total_pages is None:
-                    total_pages = meta.get("total_pages") or data.get("total_pages") or None
-
-                # Fallback: stop when we got fewer than per_page items
-                if total_pages:
-                    if page >= int(total_pages):
-                        break
-                else:
-                    if len(items) < per_page:
-                        break
-
-                page += 1
-        except Exception as e:
-            logging.error(f"Error while fetching Meural playlist items: {e}")
-
-        # 2) Collect asset IDs represented in Immich output album
-        immich_asset_ids: Set[str] = set()
-        try:
-            immich_base = config.IMMICH_URL.rstrip("/")
-            headers = {"x-api-key": config.IMMICH_API_KEY, "Accept": "application/json"}
-            data, resp = self._json_request_with_retry("GET", f"{immich_base}/api/albums/{immich_album_id}", headers=headers, timeout=20)
-            if data is None:
-                logging.error("Failed to fetch Immich album assets due to invalid/empty JSON")
-                return {"error": "Immich fetch failed: invalid/empty JSON"}
-            if resp is not None:
-                resp.raise_for_status()
-            album = data
-            assets: List[Dict[str, Any]] = album.get("assets", []) or []
-
-            for asset in assets:
-                processed_name = asset.get("originalFileName") or ""
-                # Expect pattern: <assetId>_<orientation>.<ext>
-                if "_" not in processed_name:
-                    continue
-                base_asset_id = processed_name.split("_", 1)[0]
-                immich_asset_ids.add(base_asset_id)
-
-        except Exception as e:
-            logging.error(f"Error while fetching Immich album assets: {e}")
-            return {"error": f"Immich fetch failed: {e}"}
-
-        # 3) Compare sets
-        missing_on_meural = sorted(list(immich_asset_ids - meural_asset_ids))
-        only_on_meural = sorted(list(meural_asset_ids - immich_asset_ids))
-        in_both = sorted(list(meural_asset_ids & immich_asset_ids))
+        missing_on_meural = sorted(list(eligible_for_upload - meural_asset_ids))
+        only_on_meural = sorted(list(meural_asset_ids - input_asset_ids))
+        in_both = sorted(list(meural_asset_ids & input_asset_ids))
 
         result = {
             "in_meural": sorted(list(meural_asset_ids)),
-            "in_immich": sorted(list(immich_asset_ids)),
+            "in_input_album": sorted(list(input_asset_ids)),
+            "eligible_for_upload": sorted(list(eligible_for_upload)),
             "missing_on_meural": missing_on_meural,
             "only_on_meural": only_on_meural,
             "in_both": in_both,
             "counts": {
                 "meural": len(meural_asset_ids),
-                "immich": len(immich_asset_ids),
+                "input": len(input_asset_ids),
+                "eligible": len(eligible_for_upload),
                 "missing_on_meural": len(missing_on_meural),
                 "only_on_meural": len(only_on_meural),
                 "in_both": len(in_both),
@@ -424,114 +524,85 @@ class MeuralUpload:
         }
 
         logging.info(
-            "Meural vs Immich comparison: Meural=%d Immich=%d MissingOnMeural=%d OnlyOnMeural=%d",
+            "Meural vs Immich input comparison: Meural=%d Input=%d Eligible=%d MissingOnMeural=%d OnlyOnMeural=%d",
             result["counts"]["meural"],
-            result["counts"]["immich"],
+            result["counts"]["input"],
+            result["counts"]["eligible"],
             result["counts"]["missing_on_meural"],
             result["counts"]["only_on_meural"],
         )
         return result
 
-    # New method: sync Meural playlist to match Immich output album (Immich is source of truth)
-    def sync_playlist_with_immich(
+    def sync_playlist_with_input_album(
         self,
         playlist_id: Optional[str] = None,
-        immich_album_id: Optional[str] = None,
         per_page: int = 100
     ) -> Dict[str, Any]:
         """
-        Make Meural playlist match Immich output album:
-          - Add missing images (by original filename) to Meural from local processed outputs
-          - Remove images from the playlist that are not present in Immich (by original filename)
-          - If processed files are not found locally, try to locate processed assets in Immich output
-            album and download them before uploading to Meural.
+        Make Meural playlist match Immich input album:
+          - Upload missing assets that have crop metadata (generate crops on-demand)
+          - Remove items present on Meural but missing from Immich input album
         """
-        logging.info("Starting sync of Meural playlist with Immich album...")
+        logging.info("Starting sync of Meural playlist with Immich input album...")
         playlist_id = playlist_id or getattr(config, "MEURAL_PLAYLIST_ID", None)
-        immich_album_id = immich_album_id or getattr(config, "IMMICH_OUTPUT_ALBUM_ID", None)
 
-        if not playlist_id or not immich_album_id:
-            return {"error": "playlist_id and immich_album_id are required"}
+        if not playlist_id:
+            return {"error": "playlist_id is required"}
 
-        comparison = self.compare_playlist_with_immich(playlist_id, immich_album_id, per_page=per_page)
+        comparison = self.compare_playlist_with_input_album(playlist_id, per_page=per_page)
         if "error" in comparison:
             return comparison
 
-        immich_names: Set[str] = set(comparison.get("in_immich", []))
-        meural_names: Set[str] = set(comparison.get("in_meural", []))
+        to_add = comparison.get("missing_on_meural", [])
+        to_remove = comparison.get("only_on_meural", [])
 
-        # Build mapping of asset_id -> details from Meural
-        items = self._list_playlist_items(playlist_id, per_page=per_page)
-        meural_map: Dict[str, Dict[str, Any]] = {}
-        for it in items:
-            desc = (it or {}).get("description") or ""
-            lines = [ln.strip() for ln in desc.splitlines() if ln.strip()]
-            if lines:  # At least one line with asset_id
-                asset_id = lines[-1]
-                meural_map[asset_id] = {
-                    "item_id": it.get("id"),
-                    "description": '\n'.join(lines[:-1])  # All lines except asset_id
-                }
-
-        to_remove = sorted(list(meural_names - immich_names))
-        to_add = sorted(list(immich_names - meural_names))
-        to_update = []
-
-        # Check for metadata changes in existing items by comparing descriptions
-        for asset_id in immich_names & meural_names:
-            try:
-                metadata = get_asset_metadata(asset_id)
-                current_desc = meural_map.get(asset_id, {}).get("description", "")
-
-                if self._metadata_changed(metadata, current_desc):
-                    logging.info(f"Detected metadata changes for asset {asset_id}")
-                    to_update.append((asset_id, metadata))
-            except Exception as e:
-                logging.error(f"Error checking metadata changes for {asset_id}: {e}")
+        meural_map = self._get_meural_asset_map(playlist_id, per_page=per_page)
+        crop_metadata = self._normalize_crop_metadata()
 
         removed = []
         added = []
         errors = []
 
-        # Remove out-of-truth items from Meural
+        # Remove items no longer in input album
         for asset_id in to_remove:
-            for item_id in meural_map.get(asset_id, []):
+            item_ids = meural_map.get(asset_id, {}).get("item_ids", [])
+            for item_id in item_ids:
                 ok = self._remove_from_playlist(item_id, playlist_id)
                 if ok:
-                    removed.append({"item_id": item_id})
+                    removed.append({"asset_id": asset_id, "item_id": item_id})
                 else:
                     errors.append(f"Failed to remove item {item_id} for asset {asset_id}")
 
-        # No need for a helper to find asset_id by original_filename
-        # since we're using the asset_id directly from the last line
+        # Add missing items (only if crop data exists)
+        for asset_id in to_add:
+            crop_data = crop_metadata.get(asset_id, {})
+            if not crop_data:
+                logging.info(f"Skipping {asset_id}: no crop metadata found")
+                continue
 
-        immich = self._get_immich()
-
-        # Add missing items to Meural
-        for asset_id in to_add:  # These are now asset IDs, not original filenames
-            # Get metadata to build Meural description
-            metadata = get_asset_metadata(asset_id)
+            try:
+                metadata = get_asset_metadata(asset_id)
+            except Exception as e:
+                errors.append(f"Missing asset metadata for {asset_id}: {e}")
+                continue
 
             found_any = False
             for orientation in ["portrait", "landscape"]:
-                # Look for local processed file first
+                if orientation not in crop_data:
+                    continue
+
                 out_name = f"{asset_id}_{orientation}.jpg"
                 out_path = os.path.join(config.OUTPUT_FOLDER, orientation, out_name)
 
                 if not os.path.exists(out_path):
-                    # Try to locate existing processed asset in Immich output album
                     try:
-                        existing = immich._find_existing_processed_asset(asset_id, orientation, immich.output_album_id)
-                        proc_asset_id = existing["id"] if existing else None
-                        if proc_asset_id:
-                            # Download processed asset into the correct orientation folder
-                            os.makedirs(os.path.join(config.OUTPUT_FOLDER, orientation), exist_ok=True)
-                            ok, downloaded_path = immich.download_asset(proc_asset_id, os.path.join(config.OUTPUT_FOLDER, orientation))
-                            if ok and downloaded_path and os.path.exists(downloaded_path):
-                                out_path = downloaded_path
-                                logging.info(f"Downloaded processed asset for {asset_id} ({orientation}) to {out_path}")
+                        success, error = crop_image(asset_id, orientation, crop_data[orientation])
+                        if not success:
+                            errors.append(f"Failed to generate {orientation} crop for {asset_id}: {error}")
+                            continue
                     except Exception as e:
-                        logging.error(f"Failed to find/download processed asset in Immich for {asset_id} ({orientation}): {e}")
+                        errors.append(f"Error generating {orientation} crop for {asset_id}: {e}")
+                        continue
 
                 if os.path.exists(out_path):
                     ok = self.upload_image(out_path, metadata)
@@ -542,28 +613,7 @@ class MeuralUpload:
                         errors.append(f"Failed to upload {out_path} for {asset_id}")
 
             if not found_any:
-                errors.append(f"No processed files found (locally or in Immich) for asset {asset_id}")
-
-        # Update changed metadata
-        for asset_id, metadata in to_update:
-            item_id = meural_map[asset_id]["item_id"]
-            try:
-                # Reuse same metadata formatting as upload
-                exif = metadata["exif"]
-                name = (exif.get("description") or metadata["original_filename"])
-                medium = ((exif.get("city") or "") + " " +
-                        (exif.get("state") or "") + " " +
-                        (exif.get("country") or "")).strip()
-                # ...existing date parsing code...
-
-                description = f"{self._format_exif_description(exif)}\n{asset_id}".strip()
-
-                if self._set_image_metadata(item_id, name, description, medium, year):
-                    added.append({"asset_id": asset_id, "action": "metadata_updated"})
-                else:
-                    errors.append(f"Failed to update metadata for {asset_id}")
-            except Exception as e:
-                errors.append(f"Error updating metadata for {asset_id}: {e}")
+                errors.append(f"No cropped files uploaded for asset {asset_id}")
 
         summary = {
             "success": len(errors) == 0,
@@ -574,8 +624,55 @@ class MeuralUpload:
             "errors": errors,
             "counts_before": comparison.get("counts", {}),
         }
-        logging.info(f"Sync summary: added={summary['added_count']} removed={summary['removed_count']} errors={len(errors)}")
+        logging.info(
+            f"Sync summary: added={summary['added_count']} removed={summary['removed_count']} errors={len(errors)}"
+        )
         if len(errors) > 0:
             logging.error(f"Errors during sync: {errors}")
         return summary
-        return summary
+
+    def upload_from_crop_metadata(self) -> List[Dict[str, Any]]:
+        """
+        Upload all cropped images to Meural by generating them on-demand from metadata.
+        Only assets still present in the Immich input album are uploaded.
+        """
+        uploaded = []
+        crop_metadata = self._normalize_crop_metadata()
+        if not crop_metadata:
+            logging.info("No crop metadata found")
+            return uploaded
+
+        input_asset_ids = self._get_input_album_asset_ids()
+
+        for asset_id, crop_data in crop_metadata.items():
+            if asset_id not in input_asset_ids:
+                continue
+
+            try:
+                metadata = get_asset_metadata(asset_id)
+            except Exception as e:
+                logging.error(f"Missing asset metadata for {asset_id}: {e}")
+                continue
+
+            for orientation in ["portrait", "landscape"]:
+                if orientation not in crop_data:
+                    continue
+
+                out_name = f"{asset_id}_{orientation}.jpg"
+                out_path = os.path.join(config.OUTPUT_FOLDER, orientation, out_name)
+
+                if not os.path.exists(out_path):
+                    success, error = crop_image(asset_id, orientation, crop_data[orientation])
+                    if not success:
+                        logging.error(f"Failed to generate {orientation} crop for {asset_id}: {error}")
+                        continue
+
+                if os.path.exists(out_path):
+                    ok = self.upload_image(out_path, metadata)
+                    if ok:
+                        uploaded.append({"asset_id": asset_id, "path": out_path})
+                    else:
+                        logging.error(f"Failed to upload {out_path} for {asset_id}")
+
+        logging.info(f"Uploaded {len(uploaded)} cropped images to Meural")
+        return uploaded

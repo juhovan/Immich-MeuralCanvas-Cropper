@@ -115,13 +115,13 @@ async function createManageTableRow(image, allMetadata) {
                  onerror="this.style.display='none'">
             <div class="manage-image-info">
                 <div class="manage-image-filename">${truncateFilename(displayName, 25)}</div>
-                <div class="manage-image-dimensions">${image.width || '?'} × ${image.height || '?'}</div>
+                <div class="manage-image-dimensions">${image.width || "?"} × ${image.height || "?"}</div>
             </div>
             <div class="manage-image-actions">
                 <button class="manage-action-btn delete-original"
                         onclick="deleteOriginalImage('${identifier}', '${displayName}')"
-                        title="Delete from source album">
-                    <i class="fas fa-trash"></i> Delete Original
+                        title="Remove from source album">
+                    <i class="fas fa-trash"></i> Remove from Album
                 </button>
             </div>
         </div>
@@ -327,63 +327,65 @@ function recropImage(identifier, orientation) {
 /**
  * Delete original image from source album
  */
-async function deleteOriginalImage(identifier, displayName) {
-    const confirmed = confirm(
-        `Are you sure you want to delete "${displayName}" from the source album?\n\n` +
-        `This will permanently remove the original image from Immich. This action cannot be undone.`
-    );
+async function deleteOriginalImage(identifier, displayName, evt) {
+  const confirmed = confirm(
+    `Remove "${displayName}" from the source album?\n\n` +
+      `This will only remove the image from the album, not delete it from Immich.`,
+  );
 
-    if (!confirmed) return;
+  if (!confirmed) return;
 
-    try {
-        // Find the button that was clicked and show loading state
-        const button = event.target.closest('.manage-action-btn');
-        const originalContent = button.innerHTML;
-        button.disabled = true;
-        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+  const button = (evt?.target || window.event?.target)?.closest?.(".manage-action-btn") || null;
+  const originalContent = button ? button.innerHTML : null;
 
-        const response = await fetch('/delete-original', {
-            method: 'DELETE',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                identifier: identifier
-            })
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-            // Remove the row from the table
-            const row = document.querySelector(`tr[data-identifier="${identifier}"]`);
-            if (row) {
-                row.remove();
-            }
-
-            // Update image list in main app
-            if (window.APP_STATE.imageList) {
-                window.APP_STATE.imageList = window.APP_STATE.imageList.filter(img =>
-                    (img.asset_id !== identifier) && (img.filename !== identifier)
-                );
-                renderImageList();
-            }
-
-            showManageNotification('Original image deleted successfully', 'success');
-        } else {
-            showManageNotification(`Error deleting original image: ${result.error || 'Unknown error'}`, 'error');
-        }
-    } catch (error) {
-        console.error('Error deleting original image:', error);
-        showManageNotification(`Error deleting original image: ${error.message}`, 'error');
-    } finally {
-        // Reset button state
-        const button = event.target.closest('.manage-action-btn');
-        if (button) {
-            button.disabled = false;
-            button.innerHTML = originalContent;
-        }
+  try {
+    // Show loading state if button is available
+    if (button) {
+      button.disabled = true;
+      button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
     }
+
+    const response = await fetch("/delete-original", {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        identifier: identifier,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (result.success) {
+      // Remove the row from the table
+      const row = document.querySelector(`tr[data-identifier="${identifier}"]`);
+      if (row) {
+        row.remove();
+      }
+
+      // Update image list in main app
+      if (window.APP_STATE.imageList) {
+        window.APP_STATE.imageList = window.APP_STATE.imageList.filter(
+          (img) => img.asset_id !== identifier && img.filename !== identifier,
+        );
+        renderImageList();
+      }
+
+      showManageNotification("Image removed from album", "success");
+    } else {
+      showManageNotification(`Error removing image from album: ${result.error || "Unknown error"}`, "error");
+    }
+  } catch (error) {
+    console.error("Error deleting original image:", error);
+    showManageNotification(`Error removing image from album: ${error.message}`, "error");
+  } finally {
+    // Reset button state
+    if (button) {
+      button.disabled = false;
+      button.innerHTML = originalContent;
+    }
+  }
 }
 
 /**

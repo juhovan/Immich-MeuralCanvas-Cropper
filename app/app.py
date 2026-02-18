@@ -4,6 +4,7 @@ import requests
 import time
 import json
 import threading
+import uuid
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from datetime import datetime
 
@@ -47,6 +48,11 @@ meural_upload = MeuralUpload(config.MEURAL_USERNAME, config.MEURAL_PASSWORD)
 
 # Global sync state
 sync_lock = threading.Lock()
+# Background job state
+jobs_lock = threading.Lock()
+jobs = {}
+# Processed images lock
+processed_lock = threading.Lock()
 # Global asset mapping
 asset_mapping = {}
 
@@ -57,6 +63,93 @@ def acquire_sync_lock():
         logging.info("Sync blocked - another sync in progress")
         return False
     return True
+
+
+def _create_job(job_type: str) -> str:
+    job_id = str(uuid.uuid4())
+    with jobs_lock:
+        jobs[job_id] = {
+            "id": job_id,
+            "type": job_type,
+            "status": "queued",
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+            "result": None,
+        }
+    return job_id
+
+
+def _update_job(job_id: str, **updates):
+    with jobs_lock:
+        if job_id in jobs:
+            jobs[job_id].update(updates)
+
+
+def _run_complete_upload(job_id: str, asset_id: str, portrait_path: str, landscape_path: str):
+    _update_job(job_id, status="running", started_at=time.time())
+    try:
+        metadata = get_asset_metadata(asset_id)
+        uploaded_files = []
+
+        if os.path.exists(portrait_path):
+            ok = meural_upload.upload_image(portrait_path, metadata)
+            if ok:
+                uploaded_files.append(
+                    {
+                        "filename": os.path.basename(portrait_path),
+                        "original_asset_id": asset_id,
+                        "orientation": "portrait",
+                    }
+                )
+
+        if os.path.exists(landscape_path):
+            ok = meural_upload.upload_image(landscape_path, metadata)
+            if ok:
+                uploaded_files.append(
+                    {
+                        "filename": os.path.basename(landscape_path),
+                        "original_asset_id": asset_id,
+                        "orientation": "landscape",
+                    }
+                )
+
+        with processed_lock:
+            processed_images[asset_id] = "completed"
+            save_progress(processed_images)
+
+        _update_job(
+            job_id,
+            status="completed",
+            finished_at=time.time(),
+            result={"uploaded_files": uploaded_files},
+        )
+    except Exception as e:
+        logging.error("Background upload failed for %s: %s", asset_id, str(e))
+        _update_job(job_id, status="failed", finished_at=time.time(), error=str(e))
+
+
+def _run_upload_all(job_id: str):
+    _update_job(job_id, status="running", started_at=time.time())
+    try:
+        uploaded_assets = meural_upload.upload_from_crop_metadata()
+
+        with processed_lock:
+            for asset in uploaded_assets:
+                original_asset_id = asset.get("original_asset_id") or asset.get("asset_id")
+                if original_asset_id:
+                    processed_images[original_asset_id] = "completed"
+            save_progress(processed_images)
+
+        _update_job(
+            job_id,
+            status="completed",
+            finished_at=time.time(),
+            result={"uploaded_assets": uploaded_assets},
+        )
+    except Exception as e:
+        logging.error("Background upload-all failed: %s", str(e))
+        _update_job(job_id, status="failed", finished_at=time.time(), error=str(e))
 
 
 # Verify Immich connection by making a test request
@@ -73,40 +166,6 @@ try:
     # Load progress
     processed_images = load_progress()
 
-    # Check destination album to mark already-uploaded images as completed
-    try:
-        dest_assets = immich_handler.get_album_assets(immich_handler.output_album_id)
-        dest_filenames = set()
-
-        # Load asset mapping
-        asset_mapping = get_asset_mapping()
-
-        # Extract original filenames and look for our naming patterns
-        for asset in dest_assets:
-            # For new asset ID based files
-            asset_id = asset.get("id", "")
-            filename = asset.get("originalFileName", "")
-
-            # Look for our naming patterns - using the asset ID in the filename
-            if "_portrait." in filename or "_landscape." in filename:
-                # Extract the original asset ID
-                base_name = filename.split("_")[0]  # Asset ID part
-
-                # Mark the original file as completed if it exists
-                if base_name in asset_mapping["asset_to_file"]:
-                    processed_images[base_name] = "completed"
-                    logging.info(
-                        f"Marked asset ID {base_name} as completed (found in destination album)"
-                    )
-
-        # Save updated progress
-        save_progress(processed_images)
-        logging.info(
-            f"Checked destination album - marked {len([v for v in processed_images.values() if v == 'completed'])} images as completed"
-        )
-    except Exception as e:
-        logging.error(f"Error checking destination album status: {e}")
-
     # Test album access
     album_test = immich_handler._make_request(
         "GET", f"/albums/{config.IMMICH_INPUT_ALBUM_ID}"
@@ -121,12 +180,8 @@ try:
     downloaded_assets = immich_handler.sync_input_images(config.INPUT_FOLDER)
     logging.info(f"Initial sync complete. Downloaded {len(downloaded_assets)} files")
 
-    # Ensure output album doesn't contain items whose originals aren't in input album
-    purge_summary = immich_handler.remove_outputs_not_in_input()
-    logging.info(f"Purge summary on startup: {purge_summary}")
-
     logging.info("Sync to Meural playlist")
-    meural_upload.sync_playlist_with_immich()
+    meural_upload.sync_playlist_with_input_album()
 
 except Exception as e:
     logging.error(f"Initial Immich connection/sync failed: {e}")
@@ -135,7 +190,7 @@ except Exception as e:
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", immich_url=config.IMMICH_URL)
 
 
 @app.route("/dimensions")
@@ -325,22 +380,17 @@ def sync_with_immich():
             global asset_mapping
             asset_mapping = get_asset_mapping()
 
-            # After sync, purge output album of items whose source is no longer present
-            purge_summary = immich_handler.remove_outputs_not_in_input()
-            logging.info(f"Purge summary: {purge_summary}")
-
             # Get current images with updated mapping
             current_images = get_image_list(processed_images)
 
             logging.info("Sync to Meural playlist")
-            meural_upload.sync_playlist_with_immich()
+            meural_upload.sync_playlist_with_input_album()
 
             return jsonify(
                 {
                     "success": True,
                     "files": downloaded_assets,
                     "images": current_images,
-                    "purge": purge_summary,
                     "request_id": request_id,
                     "timestamp": time.time(),
                 }
@@ -407,61 +457,25 @@ def complete_image():
             config.OUTPUT_FOLDER, "landscape", landscape_filename
         )
 
-        metadata = get_asset_metadata(asset_id)
-
-        uploaded_files = []
-        if os.path.exists(portrait_path):
-            response = immich_handler.upload_asset(
-                portrait_path,
-                immich_handler.output_album_id,
-                original_asset_id=asset_id,
-            )
-
-            #meural_upload.upload_image(portrait_path, metadata)
-
-            if response.get("id"):
-                uploaded_files.append(
-                    {
-                        "filename": portrait_filename,
-                        "asset_id": response.get("id"),
-                        "original_asset_id": asset_id,
-                        "orientation": "portrait",
-                    }
-                )
-
-        if os.path.exists(landscape_path):
-            response = immich_handler.upload_asset(
-                landscape_path,
-                immich_handler.output_album_id,
-                original_asset_id=asset_id,
-            )
-
-            #meural_upload.upload_image(landscape_path, metadata)
-
-            if response.get("id"):
-                uploaded_files.append(
-                    {
-                        "filename": landscape_filename,
-                        "asset_id": response.get("id"),
-                        "original_asset_id": asset_id,
-                        "orientation": "landscape",
-                    }
-                )
-
-        # Update local status using asset_id as key
-        processed_images[asset_id] = "completed"
-        save_progress(processed_images)
+        job_id = _create_job("upload_complete")
+        thread = threading.Thread(
+            target=_run_complete_upload,
+            args=(job_id, asset_id, portrait_path, landscape_path),
+            daemon=True,
+        )
+        thread.start()
 
         logging.info(
-            "Image completed successfully [%s], uploaded %d files",
+            "Image completion queued [%s] job=%s",
             request_id,
-            len(uploaded_files),
+            job_id,
         )
 
         return jsonify(
             {
                 "success": True,
-                "uploaded_files": uploaded_files,
+                "queued": True,
+                "job_id": job_id,
                 "request_id": request_id,
                 "timestamp": time.time(),
             }
@@ -682,34 +696,28 @@ def delete_crop_data(identifier, orientation):
 
 @app.route("/upload-all", methods=["POST"])
 def upload_all_processed():
-    """Upload all processed images to Immich output album by generating them from metadata"""
+    """Upload all processed images to Meural by generating them from metadata"""
     request_id = f"upload-all-{time.time()}"
     logging.info(
         "Upload all request received [%s] from %s", request_id, request.remote_addr
     )
 
     try:
-        # Upload using crop metadata (generates images on-demand)
-        uploaded_assets = immich_handler.upload_from_crop_metadata()
-
-        logging.info(
-            "Upload all completed [%s], uploaded %d files",
-            request_id,
-            len(uploaded_assets),
+        job_id = _create_job("upload_all")
+        thread = threading.Thread(
+            target=_run_upload_all,
+            args=(job_id,),
+            daemon=True,
         )
+        thread.start()
 
-        # Mark all uploaded assets as completed
-        for asset in uploaded_assets:
-            original_asset_id = asset.get("original_asset_id")
-            if original_asset_id:
-                processed_images[original_asset_id] = "completed"
-
-        save_progress(processed_images)
+        logging.info("Upload all queued [%s] job=%s", request_id, job_id)
 
         return jsonify(
             {
                 "success": True,
-                "uploaded_assets": uploaded_assets,
+                "queued": True,
+                "job_id": job_id,
                 "request_id": request_id,
                 "timestamp": time.time(),
             }
@@ -834,7 +842,7 @@ def get_all_crop_data():
 
 @app.route("/upload-single", methods=["POST"])
 def upload_single_crop():
-    """Upload a single crop image to Immich."""
+    """Upload a single crop image to Meural."""
     request_id = f"upload-single-{time.time()}"
     logging.info(
         "Upload single request received [%s] from %s", request_id, request.remote_addr
@@ -909,19 +917,17 @@ def upload_single_crop():
                 500,
             )
 
-        # Upload to Immich
-        response = immich_handler.upload_asset(
-            output_path, immich_handler.output_album_id, original_asset_id=asset_id
-        )
+        metadata = get_asset_metadata(asset_id)
 
-        if response.get("id"):
+        ok = meural_upload.upload_image(output_path, metadata)
+
+        if ok:
             logging.info(
                 f"Successfully uploaded {orientation} crop for asset {asset_id} [%s]", request_id
             )
             return jsonify(
                 {
                     "success": True,
-                    "asset_id": response["id"],
                     "orientation": orientation,
                     "request_id": request_id,
                     "timestamp": time.time(),
@@ -932,7 +938,7 @@ def upload_single_crop():
                 jsonify(
                     {
                         "success": False,
-                        "error": f"Failed to upload {orientation} crop to Immich",
+                        "error": f"Failed to upload {orientation} crop to Meural",
                         "request_id": request_id,
                     }
                 ),
@@ -956,7 +962,7 @@ def upload_single_crop():
 
 @app.route("/delete-original", methods=["DELETE"])
 def delete_original_image():
-    """Delete original image from source album."""
+    """Remove original image from source album only."""
     request_id = f"delete-original-{time.time()}"
     logging.info(
         "Delete original request received [%s] from %s", request_id, request.remote_addr
@@ -982,17 +988,20 @@ def delete_original_image():
                     400,
                 )
 
-        # Delete the asset from Immich input album
-        result = immich_handler.delete_asset(asset_id)
+        # Remove the asset from Immich input album only
+        result = immich_handler.remove_asset_from_album(
+            config.IMMICH_INPUT_ALBUM_ID, asset_id
+        )
 
         if result.get("success", False):
             logging.info(
-                f"Successfully deleted original image {asset_id} [%s]", request_id
+                f"Successfully removed original image {asset_id} from input album [%s]",
+                request_id,
             )
             return jsonify(
                 {
                     "success": True,
-                    "message": f"Original image deleted successfully",
+                    "message": "Original image removed from input album",
                     "request_id": request_id,
                     "timestamp": time.time(),
                 }
@@ -1003,7 +1012,7 @@ def delete_original_image():
                 jsonify(
                     {
                         "success": False,
-                        "error": f"Failed to delete original image: {error_msg}",
+                        "error": f"Failed to remove image from input album: {error_msg}",
                         "request_id": request_id,
                     }
                 ),
@@ -1011,7 +1020,11 @@ def delete_original_image():
             )
 
     except Exception as e:
-        logging.error("Error deleting original image [%s]: %s", request_id, str(e))
+        logging.error(
+            "Error removing original image from input album [%s]: %s",
+            request_id,
+            str(e),
+        )
         return (
             jsonify(
                 {
@@ -1030,6 +1043,151 @@ def get_meural_devices():
     """Get list of configured Meural devices"""
     devices = meural_handler.get_device_list()
     return jsonify({"devices": devices})
+
+
+@app.route("/people/<path:identifier>", methods=["GET"])
+def get_detected_people(identifier):
+    """Get detected faces for an image, ordered left-to-right."""
+    request_id = f"people-{time.time()}"
+    try:
+        asset_id = identifier
+        if "." in identifier:
+            asset_id = get_asset_id_from_filename(identifier)
+            if not asset_id:
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": f"Cannot find asset ID for filename: {identifier}",
+                            "request_id": request_id,
+                        }
+                    ),
+                    400,
+                )
+
+        metadata = get_asset_metadata(asset_id)
+        people = metadata.get("people", []) if metadata else []
+        exif = metadata.get("exif", {}) if metadata else {}
+        description = (exif.get("description") or "").strip()
+        original_filename = (metadata.get("original_filename") or "").strip() if metadata else ""
+        city = (exif.get("city") or "").strip()
+        state = (exif.get("state") or "").strip()
+        country = (exif.get("country") or "").strip()
+        latitude = exif.get("latitude")
+        longitude = exif.get("longitude")
+
+        location_parts = [part for part in [city, state, country] if part]
+        location_text = ", ".join(location_parts)
+        if not location_text and latitude is not None and longitude is not None:
+            location_text = f"{latitude}, {longitude}"
+
+        ordered = []
+        unnamed_faces = 0
+        for person in people:
+            name = (person or {}).get("name") or ""
+            if not name:
+                faces = (person or {}).get("faces") or []
+                unnamed_faces += len(faces)
+                continue
+            faces = (person or {}).get("faces") or []
+            x_vals = [f.get("boundingBoxX1") for f in faces if f.get("boundingBoxX1") is not None]
+            x_pos = min(x_vals) if x_vals else float("inf")
+            ordered.append((x_pos, name))
+
+        ordered.sort(key=lambda item: item[0])
+        names = [name for _, name in ordered]
+
+        return jsonify(
+            {
+                "success": True,
+                "asset_id": asset_id,
+                "names": names,
+                "description": description,
+                "original_filename": original_filename,
+                "unnamed_faces": unnamed_faces,
+                "location": location_text,
+                "has_location": bool(location_text),
+                "request_id": request_id,
+                "timestamp": time.time(),
+            }
+        )
+    except Exception as e:
+        logging.error("Error getting people [%s]: %s", request_id, str(e))
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": str(e),
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                }
+            ),
+            500,
+        )
+
+
+@app.route("/jobs/<job_id>", methods=["GET"])
+def get_job_status(job_id):
+    with jobs_lock:
+        job = jobs.get(job_id)
+
+    if not job:
+        return jsonify({"success": False, "error": "Job not found"}), 404
+
+    return jsonify({"success": True, "job": job})
+
+
+@app.route("/refresh-asset", methods=["POST"])
+def refresh_asset():
+    """Refresh local asset metadata from Immich."""
+    request_id = f"refresh-asset-{time.time()}"
+    try:
+        data = request.json or {}
+        identifier = data.get("identifier")
+        if not identifier:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "identifier is required",
+                        "request_id": request_id,
+                    }
+                ),
+                400,
+            )
+
+        asset_id = identifier
+        if "." in identifier:
+            asset_id = get_asset_id_from_filename(identifier)
+            if not asset_id:
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": f"Cannot find asset ID for filename: {identifier}",
+                            "request_id": request_id,
+                        }
+                    ),
+                    400,
+                )
+
+        result = immich_handler.refresh_asset_metadata(asset_id, config.INPUT_FOLDER)
+        result.update({"request_id": request_id, "timestamp": time.time()})
+        status = 200 if result.get("success") else 500
+        return jsonify(result), status
+    except Exception as e:
+        logging.error("Error refreshing asset metadata [%s]: %s", request_id, str(e))
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": str(e),
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                }
+            ),
+            500,
+        )
 
 
 @app.route("/meural/preview", methods=["POST"])

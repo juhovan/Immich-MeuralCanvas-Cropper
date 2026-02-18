@@ -36,7 +36,7 @@ LANDSCAPE_SIZE = tuple(config["dimensions"]["landscape_size"])  # (width, height
 IMMICH_URL = config["immich"]["url"]
 IMMICH_API_KEY = config["immich"]["api_key"]
 IMMICH_INPUT_ALBUM_ID = config["immich"]["input_album_id"]
-IMMICH_OUTPUT_ALBUM_ID = config["immich"]["output_album_id"]
+IMMICH_OUTPUT_ALBUM_ID = config.get("immich", {}).get("output_album_id", "")
 
 # Meural configuration
 MEURAL_DEVICES = config.get("meural", {}).get("devices", [])
