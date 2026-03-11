@@ -192,17 +192,67 @@ class MeuralUpload:
 
         return f"{make} {model}, {lens_model}, {exposure_time}{f_number}{iso}{focal_length}".strip()
 
-    def _metadata_changed(self, current_metadata: Dict[str, Any], current_description: str) -> bool:
-        """Compare relevant metadata fields directly with what's in Meural description."""
+    def _build_meural_metadata(self, metadata: Dict[str, Any]) -> Dict[str, str]:
+        """Build expected Meural metadata fields from Immich metadata."""
+        exif = metadata.get("exif", {}) or {}
+        name = (exif.get("description") or metadata.get("original_filename") or "")
+        medium_parts = [exif.get("city"), exif.get("state"), exif.get("country")]
+        medium = ", ".join([part for part in medium_parts if part]).strip()
+        capture_dt = self._get_capture_datetime(metadata)
+        author = self._build_author_from_people(
+            self._get_people_for_asset(metadata),
+            capture_dt,
+        )
+        raw_date = metadata.get("local_date_time") or ""
+        if capture_dt is not None:
+            year = capture_dt.strftime("%d.%m.%Y %H:%M")
+        else:
+            year = raw_date[:16] if len(raw_date) > 16 else raw_date
+
+        asset_id = metadata.get("asset_id") or metadata.get("original_filename") or ""
+
+        album_names = self._get_album_names_for_asset(metadata)
+        album_list = ", ".join([name for name in album_names if name])
+        metadata_desc = self._format_exif_description(exif)
+        description_parts = []
+        if album_list:
+            description_parts.append(f"Albums: {album_list}")
+        if metadata_desc:
+            description_parts.append(metadata_desc)
+        description_line = " | ".join([part for part in description_parts if part]).strip()
+        if description_line:
+            description = f"{description_line}\n{asset_id}".strip()
+        else:
+            description = asset_id
+
+        return {
+            "name": name,
+            "author": author or "",
+            "description": description,
+            "medium": medium,
+            "year": year,
+        }
+
+    def _metadata_changed(self, expected: Dict[str, str], current_item: Dict[str, Any]) -> bool:
+        """Compare expected metadata fields with what's in Meural item."""
         try:
-            expected_desc = self._format_exif_description(current_metadata.get("exif", {}))
-            actual_desc = current_description.rsplit('\n', 1)[0].strip()
-            return expected_desc != actual_desc
+            def norm(value: Any) -> str:
+                return ("" if value is None else str(value)).strip()
+
+            fields = ["name", "author", "description", "medium", "year"]
+            for field in fields:
+                if norm(expected.get(field)) != norm(current_item.get(field)):
+                    return True
+            return False
         except Exception as e:
             logging.error(f"Error comparing metadata: {e}")
             return False
 
-    def _build_author_from_people(self, people: List[Dict[str, Any]]) -> str:
+    def _build_author_from_people(
+        self,
+        people: List[Dict[str, Any]],
+        capture_dt: Optional[datetime] = None,
+    ) -> str:
         if not people:
             return ""
 
@@ -211,6 +261,10 @@ class MeuralUpload:
             name = (person or {}).get("name") or ""
             if not name:
                 continue
+            birth_date = (person or {}).get("birthDate")
+            age_suffix = self._format_age_suffix(birth_date, capture_dt)
+            if age_suffix:
+                name = f"{name} {age_suffix}"
             faces = (person or {}).get("faces") or []
             x_vals = [f.get("boundingBoxX1") for f in faces if f.get("boundingBoxX1") is not None]
             x_pos = min(x_vals) if x_vals else float("inf")
@@ -218,6 +272,59 @@ class MeuralUpload:
 
         ordered.sort(key=lambda item: item[0])
         return ", ".join([name for _, name in ordered])
+
+    def _get_capture_datetime(self, metadata: Dict[str, Any]) -> Optional[datetime]:
+        raw_date = metadata.get("local_date_time") or ""
+        if not raw_date:
+            return None
+        try:
+            raw_date = raw_date.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(raw_date)
+            if dt.tzinfo is None:
+                tz_value = (metadata.get("exif", {}) or {}).get("timeZone")
+                tzinfo = self._parse_timezone_offset(tz_value)
+                if tzinfo is not None:
+                    dt = dt.replace(tzinfo=tzinfo)
+            return dt
+        except Exception:
+            return None
+
+    def _format_age_suffix(
+        self,
+        birth_date: Optional[str],
+        capture_dt: Optional[datetime],
+    ) -> str:
+        if not birth_date or capture_dt is None:
+            return ""
+
+        try:
+            birth = datetime.fromisoformat(birth_date).date()
+        except Exception:
+            return ""
+
+        photo_date = capture_dt.date()
+        if photo_date < birth:
+            return ""
+
+        years = photo_date.year - birth.year
+        if (photo_date.month, photo_date.day) < (birth.month, birth.day):
+            years -= 1
+
+        if years >= 1:
+            unit = "year" if years == 1 else "years"
+            return f"({years} {unit})"
+
+        months = (photo_date.year - birth.year) * 12 + (photo_date.month - birth.month)
+        if photo_date.day < birth.day:
+            months -= 1
+
+        if months >= 1:
+            unit = "month" if months == 1 else "months"
+            return f"({months} {unit})"
+
+        days = (photo_date - birth).days
+        unit = "day" if days == 1 else "days"
+        return f"({days} {unit})"
 
     def _extract_album_names(self, albums: Any) -> List[str]:
         names: List[str] = []
@@ -275,7 +382,7 @@ class MeuralUpload:
 
         tz_value = tz_value.strip()
         if tz_value in ("Z", "UTC"):
-            return datetime.timezone.utc
+            return timezone.utc
 
         # Accept formats like +02:00, -0500, UTC+02:00
         if tz_value.upper().startswith("UTC"):
@@ -297,8 +404,8 @@ class MeuralUpload:
         except Exception:
             return None
 
-        offset = datetime.timedelta(hours=hours * sign, minutes=minutes * sign)
-        return datetime.timezone(offset)
+        offset = timedelta(hours=hours * sign, minutes=minutes * sign)
+        return timezone(offset)
 
     def _get_people_for_asset(self, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
         people = metadata.get("people") or []
@@ -322,50 +429,16 @@ class MeuralUpload:
         if not image_id:
             return False
 
-        exif = metadata["exif"]
-        name = (exif.get("description") or metadata["original_filename"])
-        medium_parts = [
-            exif.get("city"),
-            exif.get("state"),
-            exif.get("country"),
-        ]
-        medium = ", ".join([part for part in medium_parts if part]).strip()
-        author = self._build_author_from_people(self._get_people_for_asset(metadata))
-        raw_date = metadata["local_date_time"]
-        try:
-            raw_date = raw_date.replace("Z", "+00:00")
-            dt = datetime.fromisoformat(raw_date)
-            if dt.tzinfo is None:
-                tz_value = (metadata.get("exif", {}) or {}).get("timeZone")
-                tzinfo = self._parse_timezone_offset(tz_value)
-                if tzinfo is not None:
-                    dt = dt.replace(tzinfo=tzinfo)
-            year = dt.strftime("%d.%m.%Y %H:%M")
-        except Exception:
-            year = raw_date[:16] if len(raw_date) > 16 else raw_date
+        expected = self._build_meural_metadata(metadata)
 
-        # Use asset_id instead of original_filename in the last line of the description
-        # This is our unique identifier for matching between Immich and Meural
-        asset_id = metadata.get("asset_id", "")
-        if not asset_id:
-            # Fallback to original_filename only if we must
-            asset_id = metadata["original_filename"]
-
-        album_names = self._get_album_names_for_asset(metadata)
-        album_list = ", ".join([name for name in album_names if name])
-        metadata_desc = self._format_exif_description(exif)
-        description_parts = []
-        if album_list:
-            description_parts.append(f"Albums: {album_list}")
-        if metadata_desc:
-            description_parts.append(metadata_desc)
-        description_line = " | ".join([part for part in description_parts if part]).strip()
-        if description_line:
-            description = f"{description_line}\n{asset_id}".strip()
-        else:
-            description = asset_id
-
-        set_image_metdata = self._set_image_metadata(image_id, name, author, description, medium, year)
+        set_image_metdata = self._set_image_metadata(
+            image_id,
+            expected.get("name"),
+            expected.get("author"),
+            expected.get("description"),
+            expected.get("medium"),
+            expected.get("year"),
+        )
         add_to_playlist = self._add_to_playlist(image_id, config.MEURAL_PLAYLIST_ID)
         if not set_image_metdata or not add_to_playlist:
             logging.error(f"Failed to set metadata or add image {image_id} to playlist.")
@@ -463,9 +536,12 @@ class MeuralUpload:
             if not lines:
                 continue
             asset_id = lines[-1]
-            entry = meural_map.setdefault(asset_id, {"item_ids": [], "description": ""})
+            entry = meural_map.setdefault(
+                asset_id, {"item_ids": [], "description": "", "items": []}
+            )
             entry["item_ids"].append(it.get("id"))
             entry["description"] = "\n".join(lines[:-1])
+            entry["items"].append(it)
         return meural_map
 
     def compare_playlist_with_input_album(
@@ -561,6 +637,7 @@ class MeuralUpload:
 
         removed = []
         added = []
+        updated = []
         errors = []
 
         # Remove items no longer in input album
@@ -615,17 +692,52 @@ class MeuralUpload:
             if not found_any:
                 errors.append(f"No cropped files uploaded for asset {asset_id}")
 
+        # Validate/update metadata for items that exist in both
+        in_both = comparison.get("in_both", [])
+        for asset_id in in_both:
+            item_entry = meural_map.get(asset_id) or {}
+            items = item_entry.get("items") or []
+            if not items:
+                continue
+
+            try:
+                metadata = get_asset_metadata(asset_id)
+            except Exception as e:
+                errors.append(f"Missing asset metadata for {asset_id}: {e}")
+                continue
+
+            expected = self._build_meural_metadata(metadata)
+
+            for it in items:
+                if not it or not it.get("id"):
+                    continue
+                if self._metadata_changed(expected, it):
+                    ok = self._set_image_metadata(
+                        it.get("id"),
+                        expected.get("name"),
+                        expected.get("author"),
+                        expected.get("description"),
+                        expected.get("medium"),
+                        expected.get("year"),
+                    )
+                    if ok:
+                        updated.append({"asset_id": asset_id, "item_id": it.get("id")})
+                    else:
+                        errors.append(f"Failed to update metadata for item {it.get('id')} (asset {asset_id})")
+
         summary = {
             "success": len(errors) == 0,
             "removed_count": len(removed),
             "added_count": len(added),
+            "updated_count": len(updated),
             "removed": removed,
             "added": added,
+            "updated": updated,
             "errors": errors,
             "counts_before": comparison.get("counts", {}),
         }
         logging.info(
-            f"Sync summary: added={summary['added_count']} removed={summary['removed_count']} errors={len(errors)}"
+            f"Sync summary: added={summary['added_count']} removed={summary['removed_count']} updated={summary['updated_count']} errors={len(errors)}"
         )
         if len(errors) > 0:
             logging.error(f"Errors during sync: {errors}")
