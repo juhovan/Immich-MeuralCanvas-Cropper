@@ -48,6 +48,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=sha
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.event.inputs.branch == 'main' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
