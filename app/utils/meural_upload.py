@@ -311,8 +311,7 @@ class MeuralUpload:
             years -= 1
 
         if years >= 1:
-            unit = "year" if years == 1 else "years"
-            return f"({years} {unit})"
+            return f"({years})"
 
         months = (photo_date.year - birth.year) * 12 + (photo_date.month - birth.month)
         if photo_date.day < birth.day:
