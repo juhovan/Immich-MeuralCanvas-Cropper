@@ -1,12 +1,6 @@
-FROM python:3.13-slim-bullseye
+FROM python:3.14.3-alpine
 
 WORKDIR /app
-
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
 
 # Create config directory
 RUN mkdir /config
