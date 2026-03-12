@@ -167,7 +167,7 @@ body {
 
 .job-status--running::before {
     content: "\f110";
-    font-family: "Font Awesome 6 Free";
+    font-family: "Font Awesome 7 Free";
     font-weight: 900;
     display: inline-block;
     animation: fa-spin 1s infinite linear;
@@ -175,13 +175,13 @@ body {
 
 .job-status--success::before {
     content: "\f00c";
-    font-family: "Font Awesome 6 Free";
+    font-family: "Font Awesome 7 Free";
     font-weight: 900;
 }
 
 .job-status--error::before {
     content: "\f071";
-    font-family: "Font Awesome 6 Free";
+    font-family: "Font Awesome 7 Free";
     font-weight: 900;
 }
 
