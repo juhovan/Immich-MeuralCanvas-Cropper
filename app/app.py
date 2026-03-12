@@ -18,6 +18,7 @@ from utils.file_handler import (
     save_crop_data_json,
     read_crop_data_json,
     read_all_crop_metadata,
+    delete_crop_metadata,
     get_asset_id_from_filename,
     get_filename_from_asset_id,
     get_asset_mapping,
@@ -963,6 +964,7 @@ def upload_single_crop():
 @app.route("/delete-original", methods=["DELETE"])
 def delete_original_image():
     """Remove original image from source album only."""
+    global processed_images
     request_id = f"delete-original-{time.time()}"
     logging.info(
         "Delete original request received [%s] from %s", request_id, request.remote_addr
@@ -998,6 +1000,44 @@ def delete_original_image():
                 f"Successfully removed original image {asset_id} from input album [%s]",
                 request_id,
             )
+
+            # Cleanup local files and metadata so it does not reappear on refresh
+            filename = identifier if "." in identifier else get_filename_from_asset_id(asset_id)
+            if filename:
+                input_path = os.path.join(config.INPUT_FOLDER, filename)
+                if os.path.exists(input_path):
+                    try:
+                        os.remove(input_path)
+                    except Exception as e:
+                        logging.warning("Failed to delete input file %s: %s", input_path, str(e))
+
+            metadata_path = os.path.join(config.INPUT_FOLDER, ".metadata", f"{asset_id}.json")
+            if os.path.exists(metadata_path):
+                try:
+                    os.remove(metadata_path)
+                except Exception as e:
+                    logging.warning("Failed to delete metadata file %s: %s", metadata_path, str(e))
+
+            # Remove output crops if present
+            for orientation in ["portrait", "landscape"]:
+                output_path = os.path.join(
+                    config.OUTPUT_FOLDER, orientation, f"{asset_id}_{orientation}.jpg"
+                )
+                if os.path.exists(output_path):
+                    try:
+                        os.remove(output_path)
+                    except Exception as e:
+                        logging.warning("Failed to delete output file %s: %s", output_path, str(e))
+
+            # Remove crop metadata
+            delete_crop_metadata(asset_id)
+
+            # Remove processed status
+            with processed_lock:
+                if asset_id in processed_images:
+                    del processed_images[asset_id]
+                    save_progress(processed_images)
+
             return jsonify(
                 {
                     "success": True,

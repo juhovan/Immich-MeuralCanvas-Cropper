@@ -191,6 +191,39 @@ def read_all_crop_metadata():
         return {"crops": {}}
 
 
+def delete_crop_metadata(asset_id: str) -> bool:
+    """Delete crop metadata for an asset from metadata.json.
+
+    Args:
+        asset_id (str): Immich asset ID
+
+    Returns:
+        bool: True if deletion succeeded or nothing to delete, False on error
+    """
+    try:
+        json_path = os.path.join("/config/crops", "metadata.json")
+
+        if not os.path.exists(json_path):
+            logging.debug("No metadata.json file found")
+            return True
+
+        with open(json_path, "r") as f:
+            metadata = json.load(f)
+
+        crops = metadata.get("crops", {})
+        if asset_id in crops:
+            del crops[asset_id]
+            metadata["crops"] = crops
+
+            with open(json_path, "w") as f:
+                json.dump(metadata, f)
+
+        return True
+    except Exception as e:
+        logging.error(f"Error deleting crop metadata for {asset_id}: {str(e)}")
+        return False
+
+
 def get_asset_id_from_filename(filename):
     """Get asset ID from filename.
 

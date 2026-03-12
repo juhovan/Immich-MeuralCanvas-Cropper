@@ -366,10 +366,46 @@ async function deleteOriginalImage(identifier, displayName, evt) {
 
       // Update image list in main app
       if (window.APP_STATE.imageList) {
-        window.APP_STATE.imageList = window.APP_STATE.imageList.filter(
-          (img) => img.asset_id !== identifier && img.filename !== identifier,
-        );
-        renderImageList();
+                const wasCurrent =
+                  window.APP_STATE.currentImage &&
+                  (window.APP_STATE.currentImage.asset_id === identifier ||
+                    window.APP_STATE.currentImage.filename === identifier);
+
+                window.APP_STATE.imageList = window.APP_STATE.imageList.filter(
+                  (img) => img.asset_id !== identifier && img.filename !== identifier,
+                );
+
+                // Re-render list to keep status icons and filters consistent
+                renderImageList();
+
+                // If the current image was removed, move to the next available one
+                if (wasCurrent) {
+                  const filterSwitch = document.getElementById("show-unprocessed-only");
+                  const showOnlyUnprocessed = filterSwitch && filterSwitch.checked;
+
+                  const nextImage = showOnlyUnprocessed
+                    ? window.APP_STATE.imageList.find((img) => img.status === "unprocessed")
+                    : window.APP_STATE.imageList.find((img) => img.status !== "completed") ||
+                      window.APP_STATE.imageList[0];
+
+                  requestAnimationFrame(() => {
+                    if (!window.APP_STATE.syncing) {
+                      if (nextImage) {
+                        selectImage(nextImage.asset_id || nextImage.filename);
+                      } else {
+                        window.APP_STATE.currentImage = null;
+                        if (window.ELEMENTS?.currentImageEl) {
+                          window.ELEMENTS.currentImageEl.style.display = "none";
+                        }
+                        showView("no-image-view");
+
+                        if (showOnlyUnprocessed) {
+                          alert("No unprocessed images available. Turn off the filter to see all images.");
+                        }
+                      }
+                    }
+                  });
+                }
       }
 
       showManageNotification("Image removed from album", "success");

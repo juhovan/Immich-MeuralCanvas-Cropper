@@ -141,7 +141,7 @@ function renderImageList() {
             const identifier = image.asset_id || image.filename;
 
             // Generate thumbnail URL
-            const thumbnailUrl = `/image/${encodeURIComponent(identifier)}?t=${Date.now()}`;
+            const thumbnailUrl = `/image/${encodeURIComponent(identifier)}`;
 
             // Add data-status attribute for filtering
             return `<div class="image-grid-item ${statusClass}" ${assetIdAttr} ${filenameAttr} data-status="${image.status || 'unprocessed'}" data-identifier="${identifier}">
