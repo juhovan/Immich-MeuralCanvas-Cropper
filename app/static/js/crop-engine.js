@@ -717,6 +717,34 @@ function updateCropValues() {
 }
 
 /**
+ * Realign crop rectangle when layout changes (e.g., metadata panel height updates)
+ */
+function realignCropAfterMetadataChange() {
+    if (!window.ELEMENTS.currentImageEl || !window.ELEMENTS.editorContainerEl || !window.ELEMENTS.cropRectangleEl) {
+        return;
+    }
+
+    const { currentStage } = window.APP_STATE;
+    if (currentStage !== 1 && currentStage !== 2) {
+        return;
+    }
+
+    if (!window.ELEMENTS.currentImageEl.complete || !window.ELEMENTS.currentImageEl.naturalWidth) {
+        return;
+    }
+
+    const orientation = currentStage === 1 ? 'portrait' : 'landscape';
+    const aspectRatio = getAspectRatio(orientation);
+
+    requestAnimationFrame(() => {
+        window._cropRectangleInitialized = false;
+        initCropRectangle(aspectRatio);
+    });
+}
+
+window.realignCropAfterMetadataChange = realignCropAfterMetadataChange;
+
+/**
  * Perform crop operation on the server
  * @param {string} orientation - Either 'portrait' or 'landscape'
  */

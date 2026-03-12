@@ -238,6 +238,12 @@ async function initializeApp() {
       if (typeof updateDetectedFaces === "function") {
         updateDetectedFaces(identifier);
       }
+
+            if (typeof realignCropAfterMetadataChange === "function") {
+                setTimeout(() => {
+                    realignCropAfterMetadataChange();
+                }, 50);
+            }
     });
 
     setupButtonHandler(window.ELEMENTS.btnSaveEl, () => {
