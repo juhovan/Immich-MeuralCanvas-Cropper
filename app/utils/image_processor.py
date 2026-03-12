@@ -105,7 +105,13 @@ def crop_image(asset_id, orientation, crop_data):
         os.makedirs(output_dir, exist_ok=True)
 
         output_path = os.path.join(output_dir, output_filename)
-        output_img.save(output_path, exif=exif_bytes)
+        output_img.save(
+            output_path,
+            exif=exif_bytes,
+            quality=95,
+            subsampling=0,
+            optimize=True,
+        )
 
         return True, None
 
