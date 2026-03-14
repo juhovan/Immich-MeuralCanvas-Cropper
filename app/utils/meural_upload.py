@@ -24,6 +24,8 @@ class MeuralUpload:
         self.authenticate()
         # Lazy Immich handler (created only when needed)
         self._immich = None
+        # Cache resolved album names per asset to avoid repeated API requests
+        self._asset_album_names_cache: Dict[str, List[str]] = {}
 
     def authenticate(self, path="/authenticate"):
         try:
@@ -172,6 +174,38 @@ class MeuralUpload:
             f"Error adding image {image_id} to playlist {playlist_id}: {resp.status_code} {resp.text[:200]}"
         )
         return False
+
+    def get_item(self, item_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a Meural item by ID."""
+        if not item_id:
+            return None
+
+        if not self.token_time or (time.time() - self.token_time) > 300:
+            self.authenticate()
+
+        if not self.token:
+            logging.error("Error fetching Meural item %s: missing auth token", item_id)
+            return None
+
+        headers = {"Authorization": f"Token {self.token}"}
+        r, _ = self._json_request_with_retry(
+            "GET",
+            f"{self.base_url}/items/{item_id}",
+            headers=headers,
+        )
+
+        if r is None:
+            logging.error("Error fetching Meural item %s: invalid/empty JSON response", item_id)
+            return None
+
+        if isinstance(r, dict) and "error" in r:
+            logging.error("Error fetching Meural item %s: %s", item_id, r.get("error"))
+            return None
+
+        if isinstance(r, dict) and "data" in r:
+            return r.get("data") or None
+
+        return r if isinstance(r, dict) else None
 
     def _format_exif_description(self, exif: Dict[str, Any]) -> str:
         """Format EXIF data into a description string."""
@@ -325,7 +359,11 @@ class MeuralUpload:
         unit = "day" if days == 1 else "days"
         return f"({days} {unit})"
 
-    def _extract_album_names(self, albums: Any) -> List[str]:
+    def _extract_album_names(
+        self,
+        albums: Any,
+        ignore_album_id: Optional[str] = None,
+    ) -> List[str]:
         names: List[str] = []
         if not albums:
             return names
@@ -335,14 +373,28 @@ class MeuralUpload:
                     names.append(album)
                 continue
             if isinstance(album, dict):
+                album_id = album.get("id") or album.get("albumId") or album.get("album_id")
+                if ignore_album_id and album_id == ignore_album_id:
+                    continue
                 name = album.get("albumName") or album.get("name") or album.get("title")
                 if name:
                     names.append(name)
         return names
 
     def _get_album_names_for_asset(self, metadata: Dict[str, Any]) -> List[str]:
-        names = self._extract_album_names(metadata.get("albums") or metadata.get("albumInfo"))
+        ignore_album_id = config.IMMICH_INPUT_ALBUM_ID
+        asset_id = metadata.get("asset_id")
+
+        if asset_id and asset_id in self._asset_album_names_cache:
+            return self._asset_album_names_cache.get(asset_id, [])
+
+        names = self._extract_album_names(
+            metadata.get("albums") or metadata.get("albumInfo"),
+            ignore_album_id=ignore_album_id,
+        )
         if names:
+            if asset_id:
+                self._asset_album_names_cache[asset_id] = names
             return names
 
         album_ids = metadata.get("album_ids") or metadata.get("albumIds") or []
@@ -351,6 +403,8 @@ class MeuralUpload:
                 immich = self._get_immich()
                 resolved = []
                 for album_id in album_ids:
+                    if ignore_album_id and album_id == ignore_album_id:
+                        continue
                     try:
                         album_info = immich._make_request("GET", f"/albums/{album_id}")
                         name = album_info.get("albumName") or album_info.get("name") or album_info.get("title")
@@ -359,20 +413,25 @@ class MeuralUpload:
                     except Exception:
                         continue
                 if resolved:
+                    if asset_id:
+                        self._asset_album_names_cache[asset_id] = resolved
                     return resolved
             except Exception as e:
                 logging.error(f"Failed to resolve album IDs from metadata: {e}")
 
-        asset_id = metadata.get("asset_id")
         if not asset_id:
             return []
 
         try:
             immich = self._get_immich()
+            # Query albums by asset (reliable source for album membership)
             albums = immich.get_asset_albums(asset_id)
-            return self._extract_album_names(albums)
+            names = self._extract_album_names(albums, ignore_album_id=ignore_album_id)
+            self._asset_album_names_cache[asset_id] = names
+            return names
         except Exception as e:
             logging.error(f"Failed to fetch albums for asset {asset_id}: {e}")
+            self._asset_album_names_cache[asset_id] = []
             return []
 
     def _parse_timezone_offset(self, tz_value: str):

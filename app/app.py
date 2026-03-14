@@ -1152,6 +1152,115 @@ def get_meural_devices():
     return jsonify({"devices": devices})
 
 
+def _extract_identifier_from_description(description: str) -> str:
+    if not description:
+        return ""
+    lines = [line.strip() for line in description.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+@app.route("/meural/current", methods=["POST"])
+def get_current_meural_item():
+    """Resolve the currently displayed Meural item to an Immich identifier."""
+    request_id = f"meural-current-{time.time()}"
+    try:
+        data = request.json or {}
+        device_ip = data.get("device_ip")
+
+        if not device_ip:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "message": "Device IP is required",
+                        "request_id": request_id,
+                    }
+                ),
+                400,
+            )
+
+        device_result = meural_handler.get_current_item_id(device_ip)
+        if not device_result.get("success"):
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "message": device_result.get("message")
+                        or "Unable to read current image from device",
+                        "request_id": request_id,
+                    }
+                ),
+                502,
+            )
+
+        item_id = device_result.get("item_id")
+        if not item_id:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "message": "Device did not provide a current item id",
+                        "request_id": request_id,
+                    }
+                ),
+                502,
+            )
+
+        item = meural_upload.get_item(item_id)
+        description = ""
+        name = ""
+        if isinstance(item, dict):
+            description = item.get("description") or ""
+            name = item.get("name") or ""
+
+        identifier = _extract_identifier_from_description(description)
+
+        if not identifier:
+            raw_desc = ""
+            raw_payload = device_result.get("raw")
+            if isinstance(raw_payload, dict):
+                raw_desc = raw_payload.get("description") or ""
+            identifier = _extract_identifier_from_description(raw_desc)
+
+        if not identifier:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "message": "Current item found but identifier is missing",
+                        "item_id": item_id,
+                        "request_id": request_id,
+                    }
+                ),
+                404,
+            )
+
+        return jsonify(
+            {
+                "success": True,
+                "identifier": identifier,
+                "item_id": item_id,
+                "name": name,
+                "description": description,
+                "request_id": request_id,
+                "timestamp": time.time(),
+            }
+        )
+    except Exception as e:
+        logging.error("Error resolving current Meural item [%s]: %s", request_id, str(e))
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "message": str(e),
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                }
+            ),
+            500,
+        )
+
+
 @app.route("/people/<path:identifier>", methods=["GET"])
 def get_detected_people(identifier):
     """Get detected faces for an image, ordered left-to-right."""

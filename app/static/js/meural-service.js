@@ -86,6 +86,78 @@ async function previewOnMeural(deviceIp, identifier, orientation, useTempCrop = 
 }
 
 /**
+ * Fetch the currently displayed image from a Meural Canvas
+ */
+async function fetchCurrentFromMeural(deviceIp) {
+    try {
+        const response = await fetch('/meural/current', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ device_ip: deviceIp })
+        });
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching current Meural image:', error);
+        return { success: false, message: error.toString() };
+    }
+}
+
+/**
+ * Open the currently displayed Meural image in the app
+ */
+function openCurrentFromMeural() {
+    if (window.APP_STATE?.syncing) {
+        alert('Cannot open from Meural while syncing.');
+        return;
+    }
+
+    showMeuralDeviceDialog(deviceIp => {
+        const openBtn = window.ELEMENTS?.btnMeuralOpenCurrentEl;
+        const originalText = openBtn?.innerHTML;
+
+        if (openBtn) {
+            openBtn.disabled = true;
+            openBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Opening...';
+        }
+
+        fetchCurrentFromMeural(deviceIp)
+            .then(result => {
+                if (!result.success) {
+                    alert(`Error: ${result.message || 'Failed to fetch current image'}`);
+                    return;
+                }
+
+                const identifier = result.identifier;
+                if (!identifier) {
+                    alert('Current image identifier not found.');
+                    return;
+                }
+
+                if (typeof selectImage === 'function') {
+                    selectImage(identifier);
+                } else {
+                    alert('Image selection is not available.');
+                }
+            })
+            .catch(error => {
+                console.error('Error opening current Meural image:', error);
+                alert(`Error: ${error}`);
+            })
+            .finally(() => {
+                if (openBtn) {
+                    openBtn.disabled = false;
+                    openBtn.innerHTML = originalText;
+                }
+            });
+    });
+}
+
+window.openCurrentFromMeural = openCurrentFromMeural;
+
+/**
  * Show Meural device selection dialog
  */
 function showMeuralDeviceDialog(callback) {

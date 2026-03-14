@@ -39,6 +39,8 @@ async function initializeApp() {
       btnImmichSync: "btn-immich-sync",
       btnImmichUpload: "btn-immich-upload",
       btnMeuralPreview: "btn-meural-preview",
+      btnMeuralOpenCurrent: "btn-meural-open-current",
+      btnMeuralOpenCurrentWelcome: "btn-meural-open-current-welcome",
       stage1: "stage-1",
       stage2: "stage-2",
       stage3: "stage-3",
@@ -245,6 +247,28 @@ async function initializeApp() {
                 }, 50);
             }
     });
+
+        setupButtonHandler(window.ELEMENTS.btnMeuralOpenCurrentEl, () => {
+          if (window.APP_STATE.syncing) {
+            return;
+          }
+          if (typeof openCurrentFromMeural === "function") {
+            openCurrentFromMeural();
+          } else {
+            alert("Open from Meural is not available.");
+          }
+        });
+
+        setupButtonHandler(window.ELEMENTS.btnMeuralOpenCurrentWelcomeEl, () => {
+          if (window.APP_STATE.syncing) {
+            return;
+          }
+          if (typeof openCurrentFromMeural === "function") {
+            openCurrentFromMeural();
+          } else {
+            alert("Open from Meural is not available.");
+          }
+        });
 
     setupButtonHandler(window.ELEMENTS.btnSaveEl, () => {
         if (!window.APP_STATE.syncing) {

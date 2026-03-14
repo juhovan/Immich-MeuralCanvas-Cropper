@@ -43,6 +43,42 @@ class MeuralHandler:
         """
         return [{"name": d["name"], "ip": d["ip"]} for d in self.devices]
 
+    def get_current_item_id(self, device_ip: str) -> dict:
+        """Get currently displayed Meural item ID from device gallery status endpoint."""
+        if not device_ip:
+            return {"success": False, "message": "Device IP is required"}
+
+        endpoint = "/remote/get_gallery_status_json/"
+        url = f"http://{device_ip}{endpoint}"
+        try:
+            response = requests.get(url, timeout=5)
+            if response.status_code != 200:
+                return {
+                    "success": False,
+                    "message": f"Gallery status request failed with HTTP {response.status_code}",
+                }
+
+            payload = response.json()
+            response_data = payload.get("response") if isinstance(payload, dict) else None
+            value = None
+            if isinstance(response_data, dict):
+                value = response_data.get("current_item")
+
+            if value:
+                return {
+                    "success": True,
+                    "item_id": str(value),
+                    "endpoint": endpoint,
+                    "raw": payload,
+                }
+        except Exception as e:
+            logging.warning("Error querying %s: %s", url, e)
+
+        return {
+            "success": False,
+            "message": "Unable to determine current item from gallery status",
+        }
+
     def _set_preview_duration(self, device_ip: str, duration: int) -> bool:
         """
         Set the preview duration on the Meural Canvas device.
