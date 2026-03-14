@@ -153,6 +153,30 @@ def _run_upload_all(job_id: str):
         _update_job(job_id, status="failed", finished_at=time.time(), error=str(e))
 
 
+def _run_reupload_all(job_id: str):
+    _update_job(job_id, status="running", started_at=time.time())
+    try:
+        result = meural_upload.reupload_all_from_crop_metadata()
+        uploaded_assets = result.get("uploaded", [])
+
+        with processed_lock:
+            for asset in uploaded_assets:
+                asset_id = asset.get("asset_id")
+                if asset_id:
+                    processed_images[asset_id] = "completed"
+            save_progress(processed_images)
+
+        _update_job(
+            job_id,
+            status="completed",
+            finished_at=time.time(),
+            result=result,
+        )
+    except Exception as e:
+        logging.error("Background reupload-all failed: %s", str(e))
+        _update_job(job_id, status="failed", finished_at=time.time(), error=str(e))
+
+
 # Verify Immich connection by making a test request
 try:
     # Validate connection to Immich
@@ -725,6 +749,49 @@ def upload_all_processed():
         )
     except Exception as e:
         logging.error("Failed to upload all images [%s]: %s", request_id, str(e))
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": str(e),
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                }
+            ),
+            500,
+        )
+
+
+@app.route("/reupload-all", methods=["POST"])
+def reupload_all_processed():
+    """Re-process all crops and replace existing Meural playlist items"""
+    request_id = f"reupload-all-{time.time()}"
+    logging.info(
+        "Reupload all request received [%s] from %s", request_id, request.remote_addr
+    )
+
+    try:
+        job_id = _create_job("reupload_all")
+        thread = threading.Thread(
+            target=_run_reupload_all,
+            args=(job_id,),
+            daemon=True,
+        )
+        thread.start()
+
+        logging.info("Reupload all queued [%s] job=%s", request_id, job_id)
+
+        return jsonify(
+            {
+                "success": True,
+                "queued": True,
+                "job_id": job_id,
+                "request_id": request_id,
+                "timestamp": time.time(),
+            }
+        )
+    except Exception as e:
+        logging.error("Failed to reupload all images [%s]: %s", request_id, str(e))
         return (
             jsonify(
                 {

@@ -787,3 +787,92 @@ class MeuralUpload:
 
         logging.info(f"Uploaded {len(uploaded)} cropped images to Meural")
         return uploaded
+
+    def reupload_all_from_crop_metadata(
+        self,
+        playlist_id: Optional[str] = None,
+        per_page: int = 100,
+    ) -> Dict[str, Any]:
+        """
+        Re-process all crops from existing crop metadata and replace items
+        in the Meural playlist with the newly generated images.
+        """
+        playlist_id = playlist_id or getattr(config, "MEURAL_PLAYLIST_ID", None)
+        if not playlist_id:
+            return {"error": "Meural playlist ID not provided"}
+
+        removed = []
+        uploaded = []
+        errors = []
+
+        crop_metadata = self._normalize_crop_metadata()
+        if not crop_metadata:
+            logging.info("No crop metadata found")
+            return {
+                "success": True,
+                "removed": removed,
+                "uploaded": uploaded,
+                "errors": errors,
+            }
+
+        input_asset_ids = self._get_input_album_asset_ids()
+        meural_map = self._get_meural_asset_map(playlist_id, per_page=per_page)
+
+        for asset_id, crop_data in crop_metadata.items():
+            if asset_id not in input_asset_ids:
+                continue
+
+            # Remove existing items for this asset from the playlist
+            item_ids = (meural_map.get(asset_id) or {}).get("item_ids", [])
+            for item_id in item_ids:
+                ok = self._remove_from_playlist(item_id, playlist_id)
+                if ok:
+                    removed.append({"asset_id": asset_id, "item_id": item_id})
+                else:
+                    errors.append(f"Failed to remove item {item_id} for asset {asset_id}")
+
+            try:
+                metadata = get_asset_metadata(asset_id)
+            except Exception as e:
+                errors.append(f"Missing asset metadata for {asset_id}: {e}")
+                continue
+
+            for orientation in ["portrait", "landscape"]:
+                if orientation not in crop_data:
+                    continue
+
+                out_name = f"{asset_id}_{orientation}.jpg"
+                out_path = os.path.join(config.OUTPUT_FOLDER, orientation, out_name)
+
+                success, error = crop_image(asset_id, orientation, crop_data[orientation])
+                if not success:
+                    errors.append(
+                        f"Failed to generate {orientation} crop for {asset_id}: {error}"
+                    )
+                    continue
+
+                if os.path.exists(out_path):
+                    ok = self.upload_image(out_path, metadata)
+                    if ok:
+                        uploaded.append(
+                            {
+                                "asset_id": asset_id,
+                                "path": out_path,
+                                "orientation": orientation,
+                            }
+                        )
+                    else:
+                        errors.append(f"Failed to upload {out_path} for {asset_id}")
+
+        logging.info(
+            "Reupload summary: removed=%d uploaded=%d errors=%d",
+            len(removed),
+            len(uploaded),
+            len(errors),
+        )
+        return {
+            "success": len(errors) == 0,
+            "removed": removed,
+            "uploaded": uploaded,
+            "errors": errors,
+        }

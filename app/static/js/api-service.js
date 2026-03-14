@@ -168,7 +168,12 @@ function uploadAllToImmich() {
     return Promise.resolve({ success: false, message: "Sync in progress" });
   }
 
-  return fetch("/upload-all", {
+  const replaceAll = confirm(
+    "Replace all images on Meural with newly reprocessed crops?\n\nOK = Replace all\nCancel = Upload missing only"
+  );
+  const endpoint = replaceAll ? "/reupload-all" : "/upload-all";
+
+  return fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -178,7 +183,10 @@ function uploadAllToImmich() {
     .then((data) => {
       if (data.success) {
         if (data.queued && data.job_id) {
-          startJobPolling(data.job_id, "Upload all to Meural");
+          startJobPolling(
+            data.job_id,
+            replaceAll ? "Replace all on Meural" : "Upload all to Meural"
+          );
           return [];
         }
         alert(`Successfully uploaded ${data.uploaded_assets?.length || 0} images to Immich`);
