@@ -34,11 +34,11 @@ def crop_image(asset_id, orientation, crop_data):
         # Extract original EXIF data
         exif_data = None
         try:
-            if 'exif' in img.info:
-                if 41729 in img.info['exif'] and isinstance(img.info['exif'][41729], int):
-                    img.info['exif'][41729] = str(img.info['exif'][41729]).encode('utf-8')
-
-                exif_data = img.info['exif']
+            exif_data = img.info.get("exif")
+            if not exif_data:
+                exif = img.getexif()
+                if exif:
+                    exif_data = exif.tobytes()
         except Exception as e:
             logging.warning(f"Could not extract EXIF data: {str(e)}")
 
