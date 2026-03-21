@@ -2,5 +2,16 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "Only run regular boto3 updates on Fridays",
+      "matchPackageNames": [
+        "boto3"
+      ],
+      "schedule": [
+        "on friday"
+      ]
+    }
   ]
 }
