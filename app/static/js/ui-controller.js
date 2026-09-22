@@ -13,6 +13,21 @@ function ensureElementsInitialized() {
     if (!window.ELEMENTS.imageGridEl) {
         window.ELEMENTS.imageGridEl = document.getElementById('image-grid');
     }
+    if (!window.ELEMENTS.editorViewEl) {
+        window.ELEMENTS.editorViewEl = document.getElementById('editor-view');
+    }
+    if (!window.ELEMENTS.noImageViewEl) {
+        window.ELEMENTS.noImageViewEl = document.getElementById('no-image-view');
+    }
+    if (!window.ELEMENTS.previewViewEl) {
+        window.ELEMENTS.previewViewEl = document.getElementById('preview-view');
+    }
+    if (!window.ELEMENTS.cropOverlayEl) {
+        window.ELEMENTS.cropOverlayEl = document.getElementById('crop-overlay');
+    }
+    if (!window.ELEMENTS.cropRectangleEl) {
+        window.ELEMENTS.cropRectangleEl = document.getElementById('crop-rectangle');
+    }
 }
 
 function updateStage() {
@@ -57,6 +72,12 @@ function updateStage() {
 
         requestAnimationFrame(() => {
             if (!APP_STATE.syncing) {
+                // Make sure crop overlay and rectangle are visible
+                cropOverlayEl.style.display = 'block';
+                cropRectangleEl.style.display = 'block';
+                previewViewEl.style.display = 'none';
+
+                // Initialize the crop rectangle with proper size
                 initCropRectangle(getAspectRatio('portrait'));
             }
         });
@@ -72,8 +93,15 @@ function updateStage() {
         btnSkipEl.innerHTML = '<i class="fas fa-forward"></i> Skip Landscape';
         btnBackEl.disabled = false;
 
+        // When coming back from review stage, ensure crop elements are properly visible
         requestAnimationFrame(() => {
             if (!APP_STATE.syncing) {
+                // Make sure crop overlay and rectangle are visible
+                cropOverlayEl.style.display = 'block';
+                cropRectangleEl.style.display = 'block';
+                previewViewEl.style.display = 'none';
+
+                // Initialize the crop rectangle with proper size
                 initCropRectangle(getAspectRatio('landscape'));
             }
         });
@@ -94,7 +122,6 @@ function updateStage() {
         cropOverlayEl.style.display = 'none';
         previewViewEl.style.display = 'block';
         btnCropEl.style.display = 'none';
-        btnSaveEl.style.display = 'block';
         btnSkipEl.style.display = 'none';
 
         // Check crop status
@@ -125,28 +152,55 @@ function updateStage() {
             }
         }
 
-        // Return to stage 1 if no crops are set
+        // Check if both orientations are skipped (no crops)
         if (!hasPortrait && !hasLandscape) {
-            APP_STATE.currentStage = 1;
-            requestAnimationFrame(() => {
-                if (!APP_STATE.syncing) {
-                    updateStage();
-                }
-            });
-            return;
+            // Both orientations skipped - show "Skip Image" button and disable preview
+            btnSaveEl.style.display = 'block';
+            btnSaveEl.innerHTML = '<i class="fas fa-forward"></i> Skip Image';
+            btnSaveEl.className = 'btn btn-meural btn-warning';
+
+            // Disable preview button
+            if (ELEMENTS.btnMeuralPreviewEl) {
+                ELEMENTS.btnMeuralPreviewEl.disabled = true;
+                ELEMENTS.btnMeuralPreviewEl.title = 'No crops available to preview';
+            }
+        } else {
+            // At least one orientation has crops - show normal "Upload Crops" button
+            btnSaveEl.style.display = 'block';
+            btnSaveEl.innerHTML = '<i class="fas fa-save"></i> Upload Crops';
+            btnSaveEl.className = 'btn btn-meural btn-success';
+
+            // Enable preview button
+            if (ELEMENTS.btnMeuralPreviewEl) {
+                ELEMENTS.btnMeuralPreviewEl.disabled = false;
+                ELEMENTS.btnMeuralPreviewEl.title = 'Preview on Meural';
+            }
         }
+
+        // Note: No longer automatically reset to stage 1 when no crops are set
+        // This is now handled by the skip button logic to properly navigate to next image
     }
 
     // Only show/hide views during stage updates if not syncing and in edit mode
     if (!APP_STATE.syncing && APP_STATE.currentImage) {
         if (currentStage === 3) {
-            // Review stage - show preview
+            // Review stage - show preview, hide crop tools
             previewViewEl.style.display = 'block';
             cropOverlayEl.style.display = 'none';
             cropRectangleEl.style.display = 'none';
+
+            // Make sure crop button is hidden and save button is shown
+            if (ELEMENTS.btnCropEl) ELEMENTS.btnCropEl.style.display = 'none';
+            if (ELEMENTS.btnSaveEl) ELEMENTS.btnSaveEl.style.display = 'block';
+            if (ELEMENTS.btnSkipEl) ELEMENTS.btnSkipEl.style.display = 'none';
         } else {
-            // Editing stages
+            // Editing stages (1 or 2) - hide preview, show crop tools
             previewViewEl.style.display = 'none';
+
+            // Make sure crop button is shown and save button is hidden
+            if (ELEMENTS.btnCropEl) ELEMENTS.btnCropEl.style.display = 'block';
+            if (ELEMENTS.btnSaveEl) ELEMENTS.btnSaveEl.style.display = 'none';
+            if (ELEMENTS.btnSkipEl) ELEMENTS.btnSkipEl.style.display = 'block';
 
             // Ensure crop tools are visible during editing stages
             requestAnimationFrame(() => {
@@ -175,6 +229,13 @@ let isViewTransitioning = false;
  * @param {string} viewName - 'editor-view' or 'no-image-view'
  */
 function showView(viewName) {
+    console.log('showView called with:', viewName, {
+        currentImage: APP_STATE.currentImage ? 'exists' : 'null',
+        syncing: APP_STATE.syncing,
+        transitioning: isViewTransitioning,
+        timestamp: new Date().toISOString()
+    });
+
     // Prevent view changes during operations
     if (APP_STATE.syncing || isViewTransitioning) {
         console.log('View change blocked:', {
@@ -205,6 +266,13 @@ function showView(viewName) {
                     ELEMENTS.noImageViewEl.style.display = 'none';
                     document.body.classList.add('has-image');
 
+                    // Only call forceImageFit once to ensure proper sizing
+                    setTimeout(() => {
+                        if (!APP_STATE.syncing) {
+                            forceImageFit();
+                        }
+                    }, 50);
+
                     // Only show crop overlay in edit mode and not preview
                     if (APP_STATE.currentStage !== 3 && !APP_STATE.syncing) {
                         // Add a slight delay for DOM updates to complete
@@ -212,10 +280,10 @@ function showView(viewName) {
                             if (!APP_STATE.syncing) {
                                 ELEMENTS.cropOverlayEl.style.display = 'block';
                                 ELEMENTS.cropRectangleEl.style.display = 'block';
-                                // Force a layout recalculation to ensure crop rectangle is positioned properly
-                                forceImageFit();
+
+                                // No need to call initCropRectangle here, forceImageFit will do it
                             }
-                        }, 50);
+                        }, 70);
                     } else if (APP_STATE.currentStage === 3) {
                         // Show preview in review stage
                         ELEMENTS.previewViewEl.style.display = 'block';
@@ -232,7 +300,7 @@ function showView(viewName) {
                     ELEMENTS.cropRectangleEl.style.display = 'none';
                     ELEMENTS.previewViewEl.style.display = 'none';
 
-                    // Show no-image view
+                    // Show landing page (no-image view) while keeping sidebar visible
                     ELEMENTS.noImageViewEl.style.display = 'block';
                     document.body.classList.remove('has-image');
                 }
@@ -242,6 +310,23 @@ function showView(viewName) {
     } catch (error) {
         console.error('Error during view transition:', error);
         isViewTransitioning = false;
+
+        // Fallback to show landing page in case of errors
+        if (viewName === 'no-image-view' || !APP_STATE.currentImage) {
+            if (ELEMENTS.noImageViewEl) {
+                ELEMENTS.noImageViewEl.style.display = 'block';
+            } else {
+                document.getElementById('no-image-view').style.display = 'block';
+            }
+
+            if (ELEMENTS.editorViewEl) {
+                ELEMENTS.editorViewEl.style.display = 'none';
+            } else {
+                document.getElementById('editor-view').style.display = 'none';
+            }
+
+            document.body.classList.remove('has-image');
+        }
     }
 }
 
@@ -274,6 +359,7 @@ function addLoadingIndicatorStyles() {
 
 // Ensure preview elements are initialized on load
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('DOMContentLoaded from ui-controller.js');
     ensureElementsInitialized();
     addLoadingIndicatorStyles();
 
@@ -282,11 +368,34 @@ document.addEventListener('DOMContentLoaded', function() {
     if (imageGridEl) {
         imageGridEl.style.display = 'grid';
     }
+
+    // Force the correct view without using showView to avoid any issues with initialization timing
+    if (!window.APP_STATE || !window.APP_STATE.currentImage) {
+        console.log('Forcing no-image-view to display in DOMContentLoaded');
+        const noImageViewEl = document.getElementById('no-image-view');
+        const editorViewEl = document.getElementById('editor-view');
+
+        if (noImageViewEl) {
+            noImageViewEl.style.display = 'block';
+        }
+        if (editorViewEl) {
+            editorViewEl.style.display = 'none';
+        }
+
+        // Using setTimeout to ensure this happens after other initialization
+        setTimeout(() => {
+            document.getElementById('no-image-view').style.display = 'block';
+            document.getElementById('editor-view').style.display = 'none';
+        }, 100);
+    }
 });
 
 // Enhanced resize handling
 window.addEventListener('resize', function() {
     if (APP_STATE.currentImage && !APP_STATE.syncing) {
+        // Mark that we're doing a viewport resize
+        window._viewportResizing = true;
+
         // Debounce resize handling
         if (window.resizeTimer) clearTimeout(window.resizeTimer);
         window.resizeTimer = setTimeout(function() {
@@ -304,6 +413,9 @@ window.addEventListener('resize', function() {
 // Also handle orientation change for mobile devices
 window.addEventListener('orientationchange', function() {
     if (APP_STATE.currentImage && !APP_STATE.syncing) {
+        // Mark that we're doing a viewport resize
+        window._viewportResizing = true;
+
         // Add a delay to ensure orientation change is complete
         setTimeout(function() {
             forceImageFit();
